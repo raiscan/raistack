@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Agent Run Dashboard</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --canvas: #edf1f6;
+    --panel: #fff;
+    --ink: #162237;
+    --muted: #475970;
+    --line: #cbd5e1;
+    --accent: #2256ad;
+    --ok: #19724c;
+    --warn: #9a4120;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --canvas: #101722;
+      --panel: #192331;
+      --ink: #eaf0f8;
+      --muted: #adbed2;
+      --line: #38495f;
+      --accent: #95baff;
+      --ok: #7dd9aa;
+      --warn: #ffbc95;
+    }
+  }
+  * { box-sizing: border-box }
+  body {
+    margin: 0;
+    background: var(--canvas);
+    color: var(--ink);
+    font: 15px/1.45 system-ui, sans-serif;
+    font-variant-numeric: tabular-nums;
+  }
+  main { width: min(100% - 2rem, 72rem); margin: 2rem auto 4rem }
+  header { display: flex; justify-content: space-between; align-items: baseline; gap: .75rem 1.5rem; flex-wrap: wrap }
+  h1 { font-size: clamp(1.55rem, 4vw, 2.3rem); letter-spacing: -.035em; margin: 0 }
+  h2 { font-size: 1.12rem; letter-spacing: -.01em; margin: 0 0 .65rem }
+  h3 { font-size: 1rem; margin: 0 0 .45rem }
+  section { margin-top: 1.5rem }
+  p { margin: 0 }
+  .muted { color: var(--muted) }
+  #connection[data-state="live"] { color: var(--ok) }
+  #connection[data-state="error"], #warnings { color: var(--warn) }
+  #warnings:empty { display: none }
+  #warnings { padding-left: 1.4rem }
+  .grid { display: grid; gap: .65rem; grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr)) }
+  .panel { min-width: 0; overflow-wrap: anywhere; background: var(--panel); border: 1px solid var(--line); border-radius: .65rem; padding: .8rem 1rem }
+  .capacity p { margin: .3rem 0 }
+  .capacity strong { font-size: 1.22rem }
+  meter { display: block; width: 100%; height: .75rem; accent-color: var(--accent); margin: .35rem 0 .55rem }
+  .jobs { display: grid; gap: .55rem }
+  .job { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: .45rem 1rem }
+  .job > * { min-width: 0 }
+  .job p { margin: .2rem 0 }
+  .job .detail { color: var(--muted); font-size: .88rem }
+  .job code { color: var(--accent); font: .85rem/1.45 ui-monospace, monospace }
+  .job .owner { grid-column: 1 / -1; border-top: 1px solid var(--line); padding-top: .4rem }
+  .repo + .repo { margin-top: .75rem }
+  .repo .jobs + h3 { margin-top: .8rem }
+  .repo .job { border-radius: .35rem }
+  .processes { margin: 0; padding: 0; list-style: none }
+  .processes li { display: flex; justify-content: space-between; align-items: baseline; gap: .55rem; padding: .3rem 0 }
+  .processes li + li { border-top: 1px solid var(--line) }
+  .processes li span:last-child { flex-shrink: 0; color: var(--muted) }
+  @media (max-width: 36rem) {
+    main { margin-top: 1.2rem }
+    .job { grid-template-columns: 1fr }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Agent Run Dashboard</h1>
+    <p class="muted" id="connection" role="status">Connecting…</p>
+  </header>
+  <ul id="warnings"></ul>
+
+  <section aria-labelledby="capacity-heading">
+    <h2 id="capacity-heading">Machine budget and live use</h2>
+    <div id="capacity" class="grid"></div>
+  </section>
+  <section aria-labelledby="running-heading">
+    <h2 id="running-heading">Running leases</h2>
+    <div id="running" class="jobs"></div>
+  </section>
+  <section aria-labelledby="waiting-heading">
+    <h2 id="waiting-heading">Waiters in queue order</h2>
+    <div id="waiting" class="jobs"></div>
+  </section>
+  <section aria-labelledby="recent-heading">
+    <h2 id="recent-heading">Recent completions</h2>
+    <div id="recent" class="jobs"></div>
+  </section>
+  <section aria-labelledby="unmanaged-heading">
+    <h2 id="unmanaged-heading">Top processes outside agent-run</h2>
+    <div id="unmanaged" class="grid"></div>
+  </section>
+  <section id="maven" aria-labelledby="maven-heading" hidden>
+    <h2 id="maven-heading">Per-repository Maven queues</h2>
+    <div id="maven-queues"></div>
+  </section>
+</main>
+
+<script>
+  const byId = id => document.getElementById(id);
+  const fmt = new Intl.NumberFormat(undefined, {maximumFractionDigits: 1});
+  const date = new Intl.DateTimeFormat(undefined, {dateStyle: "short", timeStyle: "medium"});
+  const defined = value => typeof value === "number" && Number.isFinite(value);
+  const amount = value => defined(value) ? fmt.format(value) : "—";
+  const bytes = value => {
+    if (!defined(value)) return "—";
+    for (const [size, unit] of [[2 ** 30, "GiB"], [2 ** 20, "MiB"], [2 ** 10, "KiB"]]) {
+      if (value >= size) return `${amount(value / size)} ${unit}`;
+    }
+    return `${amount(value)} B`;
+  };
+  const duration = value => {
+    if (!defined(value)) return "—";
+    const seconds = Math.floor(value);
+    const minutes = Math.floor(seconds / 60);
+    const hours = Math.floor(minutes / 60);
+    if (hours) return `${hours}h ${minutes % 60}m`;
+    if (minutes) return `${minutes}m ${seconds % 60}s`;
+    return `${seconds}s`;
+  };
+  function node(tag, content, className) {
+    const el = document.createElement(tag);
+    if (content != null) el.textContent = content;
+    if (className) el.className = className;
+    return el;
+  }
+  function meter(label, value, max) {
+    const result = node("meter");
+    result.setAttribute("aria-label", label);
+    result.max = defined(max) && max > 0 ? max : 1;
+    result.value = defined(value) ? Math.max(0, Math.min(value, result.max)) : 0;
+    return result;
+  }
+  function renderCapacity(data) {
+    const cpu = node("article", null, "panel capacity");
+    cpu.append(node("h3", "CPU"), node("strong", `${amount(data.busy_cores)} of ${amount(data.total_cores)} cores busy`),
+               node("p", `${amount(data.load_1m)} one-minute load`, "muted"),
+               meter("Busy cores relative to online cores", data.busy_cores, data.total_cores),
+               node("p", `${amount(data.reserved_cores)} of ${amount(data.cores)} queue cores reserved`),
+               node("p", `${amount(data.reserve_cores)} cores for desktop · ${amount(data.live_cores)} live headroom`, "muted"));
+    const memory = node("article", null, "panel capacity");
+    memory.append(node("h3", "Memory"), node("strong", `${bytes(data.mem_available)} MemAvailable`),
+                  node("p", `${bytes(data.mem_used)} in use · ${bytes(data.total_mem)} total`, "muted"),
+                  meter("Memory in use", data.mem_used, data.total_mem),
+                  node("p", `${bytes(data.reserved_mem)} of ${bytes(data.mem)} queue memory reserved`),
+                  node("p", `${bytes(data.reserve_mem)} for desktop · ${bytes(data.live_mem)} live headroom`, "muted"));
+    byId("capacity").replaceChildren(cpu, memory);
+  }
+  function jobCard(job, kind) {
+    const card = node("article", null, "panel job");
+    const identity = node("div");
+    const details = node("div");
+    const position = job.position == null ? "" : `${job.position}. `;
+    identity.append(node("strong", position + (job.label || job.id || "Job")));
+    if (job.command) {
+      const command = node("p");
+      command.append(node("code", job.command));
+      identity.append(command);
+    }
+    if (job.cwd || job.worktree) identity.append(node("p", job.cwd || job.worktree, "detail"));
+    if (kind === "recent") {
+      details.append(node("p", `Waited ${duration(job.wait_seconds)} · held ${duration(job.hold_seconds)}`),
+                     node("p", `Exit ${job.exit_code} · ${date.format(new Date(job.time * 1000))}`, "detail"));
+    } else {
+      const pid = job.pid == null ? "PID unavailable" : `PID ${job.pid}`;
+      details.append(node("p", `${pid} · ${amount(job.cores)} cores · ${bytes(job.mem)}`, "detail"));
+      if (kind === "waiting") {
+        details.append(node("p", `Waited ${duration(job.wait_seconds)} · ${job.admission}`));
+      } else {
+        const remaining = job.remaining_seconds == null ? "" : ` · ~${duration(job.remaining_seconds)} left`;
+        details.append(node("p", `Held ${duration(job.held_seconds)}${remaining}`));
+      }
+      if (job.liveness === "unverified") details.append(node("p", "Lease ownership unverified", "detail"));
+    }
+    card.append(identity, details);
+    if (job.owner_chain?.length) {
+      const chain = job.owner_chain.map(item => `${item.name || "process"} [${item.pid}]`).join(" ← ");
+      card.append(node("p", `Process ancestry: ${chain}`, "owner detail"));
+    }
+    return card;
+  }
+  function renderJobs(target, jobs, kind, emptyMessage) {
+    target.replaceChildren(...(jobs.length
+      ? jobs.map(job => jobCard(job, kind))
+      : [node("p", emptyMessage, "panel muted")]));
+  }
+  function processPanel(title, rows, emptyMessage) {
+    const panel = node("article", null, "panel");
+    panel.append(node("h3", title));
+    if (!rows.length) {
+      panel.append(node("p", emptyMessage, "muted"));
+      return panel;
+    }
+    const list = node("ul", null, "processes");
+    for (const process of rows) {
+      const row = node("li");
+      const cpu = defined(process.cpu_percent) ? `${amount(process.cpu_percent)}%` : "— CPU";
+      row.append(node("span", `${process.name || "process"} [${process.pid}]`),
+                 node("span", `${cpu} · ${bytes(process.rss)}`));
+      list.append(row);
+    }
+    panel.append(list);
+    return panel;
+  }
+  function renderMaven(repos) {
+    byId("maven").hidden = !repos.length;
+    byId("maven-queues").replaceChildren(...repos.map(repo => {
+      const panel = node("article", null, "panel repo");
+      const running = node("div", null, "jobs");
+      const waiting = node("div", null, "jobs");
+      panel.append(node("h3", repo.repo), node("h3", "Running"), running, node("h3", "Waiting"), waiting);
+      renderJobs(running, repo.running, "running", "No running Maven leases.");
+      renderJobs(waiting, repo.waiting, "waiting", "No waiting Maven requests.");
+      return panel;
+    }));
+  }
+  async function refresh() {
+    const connection = byId("connection");
+    try {
+      const response = await fetch("/api/status", {cache: "no-store"});
+      if (!response.ok) throw new Error("Dashboard unavailable");
+      const data = await response.json();
+      renderCapacity(data.machine);
+      renderJobs(byId("running"), data.running, "running", "No running leases.");
+      renderJobs(byId("waiting"), data.waiting, "waiting", "No jobs waiting.");
+      renderJobs(byId("recent"), data.recent, "recent", "No recent completions.");
+      byId("unmanaged").replaceChildren(
+        processPanel("By CPU", data.unmanaged.cpu, data.unmanaged.cpu_sampled
+          ? "No CPU activity measured." : "Waiting for the next CPU sample."),
+        processPanel("By resident memory", data.unmanaged.rss, "No resident processes found."));
+      renderMaven(data.maven);
+      byId("warnings").replaceChildren(...data.warnings.map(warning => node("li", warning)));
+      connection.textContent = `Live · updated ${date.format(new Date(data.captured_at * 1000))}`;
+      connection.dataset.state = "live";
+    } catch {
+      connection.textContent = "Refresh failed · retrying";
+      connection.dataset.state = "error";
+    } finally {
+      window.setTimeout(refresh, 2000);
+    }
+  }
+  refresh();
+</script>
+</body>
+</html>

@@ -9,6 +9,7 @@ ln -s "$PWD/agent-run" ~/.local/bin/agent-run
 agent-run --mem 4G --cores 4 --est 10m --label "Build" -- make test
 agent-run --status
 agent-run --stats
+agent-run --dashboard
 ```
 
 Add `~/.local/bin` to `PATH` if needed. Arguments after `--` go straight to the
@@ -68,7 +69,47 @@ Keep the state directory and slot files in place while the queue is in use.
 `--status` shows running and waiting labels, requesting PIDs, elapsed times,
 reservations, and directories. `--stats` summarizes completed wait/hold times
 and exit codes from `telemetry.jsonl`. A launcher killed before completion
-cannot write a completion event. No external service or dashboard is required.
+cannot write a completion event.
+
+## Dashboard
+
+Run `agent-run --dashboard` and open `http://127.0.0.1:8767/`. Use
+`agent-run --dashboard --port 8770` to choose another port, or use port
+`0` to have Linux pick a free port and open the URL printed by the command.
+Stop the server with Ctrl-C. The page and its `/api/status` JSON endpoint
+are available only on IPv4 loopback.
+
+The page refreshes every two seconds. It shows the configured budget,
+desktop reserves, busy CPU cores, Linux load and available memory, active reservations,
+running leases with process ancestry, waiters with observed admission
+reasons, recent completion timings, and processes outside agent-run ranked
+by sampled CPU and resident memory. CPU is measured over consecutive
+samples, with 100% equal to one logical core. The queue view is a lock-free
+snapshot, so entries and reasons can change between refreshes. The dashboard
+reads existing files and Linux counters without creating state, taking queue
+locks, or removing stale records.
+
+New leases store a display command with the executable basename and
+recognized build operations. Other arguments are represented by an ellipsis
+so arbitrary argument values stay out of leases, telemetry, and the page.
+Older leases can recover a display command from the live holder when Linux
+exposes it. Process ancestry uses process names and PIDs. Environment values
+are never read. Keep labels and working-directory names suitable for local
+display, since they are included in queue and telemetry metadata.
+
+To include OpenGGF-style Maven queues, add an optional `maven_repos` list to
+the existing `config.json` alongside any resource limits:
+
+```json
+{
+  "maven_repos": ["/absolute/path/to/repository"]
+}
+```
+
+Use absolute paths to repositories or linked worktrees. The adapter reads
+running leases and waiting requests from the shared Git directory, including
+fresh admission reasons published by the Maven scheduler. Maven queue
+records are displayed independently of agent-run accounting.
 
 ## Tests
 
