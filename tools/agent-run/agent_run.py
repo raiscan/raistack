@@ -416,14 +416,53 @@ def display_command(command):
     return " ".join(parts)
 
 
+def update(source=None, out=sys.stdout):
+    """Fast-forward the Git checkout holding this file, wherever it is installed."""
+    source = Path(source or Path(__file__).resolve().parent)
+
+    def git(*args, capture=True):
+        return subprocess.run(["git", "-C", str(source), *args], text=True, check=True,
+                              stdout=subprocess.PIPE if capture else None,
+                              stderr=subprocess.PIPE if capture else None).stdout
+
+    try:
+        root = git("rev-parse", "--show-toplevel").strip()
+    except FileNotFoundError:
+        raise OSError("--update needs git on PATH") from None
+    except subprocess.CalledProcessError:
+        raise ValueError(f"{source} is not inside a Git checkout; reinstall from a clone") from None
+    try:
+        upstream = git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}").strip()
+    except subprocess.CalledProcessError:
+        raise ValueError(f"{root} has no upstream branch to update from") from None
+    before = git("rev-parse", "HEAD").strip()
+    try:
+        git("fetch", "--quiet", capture=False)
+        git("merge", "--ff-only", "--quiet", "@{upstream}", capture=False)
+    except subprocess.CalledProcessError:
+        raise ValueError(f"could not fast-forward {root} to {upstream}; "
+                         "resolve its local changes or commits, then retry") from None
+    after = git("rev-parse", "HEAD").strip()
+    if before == after:
+        print(f"agent-run is up to date at {after[:9]} ({root})", file=out)
+        return 0
+    print(f"Updated {root} to {upstream} {after[:9]}:", file=out)
+    print(git("log", "--oneline", "--no-decorate", f"{before}..{after}").rstrip(), file=out)
+    if git("diff", "--name-only", before, after, "--", "install.sh").strip():
+        print(f"install.sh changed; run {root}/install.sh to link new commands and skills.", file=out)
+    print("Restart any running dashboard to load the new version.", file=out)
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, usage=(
         "%(prog)s [--mem 4G] [--cores 4] [--est 10m] [--label LABEL] [--java-cores] -- COMMAND ...\n"
-        "       %(prog)s --status | --stats | --dashboard [--port N]"))
+        "       %(prog)s --status | --stats | --dashboard [--port N] | --update"))
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--status", action="store_true", help="show running and waiting jobs")
     mode.add_argument("--stats", action="store_true", help="summarize completed-job telemetry")
     mode.add_argument("--dashboard", action="store_true", help="serve the local read-only dashboard")
+    mode.add_argument("--update", action="store_true", help="fast-forward this installation's Git checkout")
     parser.add_argument("--port", type=int, help="dashboard port (default: 8767)")
     parser.add_argument("--mem", help="estimated memory, such as 4G")
     parser.add_argument("--cores", type=int, help="estimated CPU cores")
@@ -434,16 +473,18 @@ def main(argv=None):
     split = argv.index("--") if "--" in argv else len(argv)
     args = parser.parse_args(argv[:split])
     command = argv[split + 1:]
-    observation = args.status or args.stats or args.dashboard
+    observation = args.status or args.stats or args.dashboard or args.update
     if args.port is not None and (not args.dashboard or not 0 <= args.port <= 65535):
         parser.error("--port requires --dashboard and must be between 0 and 65535")
     if observation and (split < len(argv) or args.java_cores or any(
             value is not None for value in (args.mem, args.cores, args.est, args.label))):
-        parser.error("observation modes do not take a command or resource options")
+        parser.error("--status, --stats, --dashboard and --update do not take a command or resource options")
     if not observation and not command:
         parser.error("supply a command after --")
 
     try:
+        if args.update:
+            return update()
         state = state_path()
         if args.dashboard:
             from agent_run_dashboard import DEFAULT_PORT, serve

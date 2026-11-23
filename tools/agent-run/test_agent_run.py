@@ -235,5 +235,67 @@ while True:
         self.assertIn("exceeds machine budget", result.stderr)
 
 
+class UpdateTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR") or "/var/tmp")
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        self.env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
+                        GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid",
+                        GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid")
+        self.git("init", "-q", "-b", "main", str(self.root / "upstream"))
+        self.commit("upstream", "tool.py", "one")
+        self.git("clone", "-q", str(self.root / "upstream"), str(self.root / "installed"))
+        # A symlinked command in another directory resolves to the checkout.
+        (self.root / "bin").mkdir()
+        (self.root / "bin" / "tool.py").symlink_to(self.root / "installed" / "tool.py")
+
+    def git(self, *args, cwd=None):
+        return subprocess.run(["git", *args], cwd=cwd, env=self.env, check=True,
+                              capture_output=True, text=True).stdout
+
+    def commit(self, repo, name, text):
+        (self.root / repo / name).write_text(text)
+        self.git("add", name, cwd=self.root / repo)
+        self.git("commit", "-qm", f"{name} {text}", cwd=self.root / repo)
+
+    def update(self):
+        import io
+        sys.path.insert(0, str(ROOT))
+        import agent_run
+        out = io.StringIO()
+        previous = os.environ.copy()
+        os.environ.update(self.env)
+        try:
+            code = agent_run.update((self.root / "bin" / "tool.py").resolve().parent, out)
+        finally:
+            os.environ.clear()
+            os.environ.update(previous)
+        return code, out.getvalue()
+
+    def test_fast_forwards_the_resolved_checkout(self):
+        self.commit("upstream", "install.sh", "two")
+        code, out = self.update()
+        self.assertEqual(code, 0)
+        self.assertEqual((self.root / "installed" / "install.sh").read_text(), "two")
+        self.assertIn("install.sh two", out)
+        self.assertIn("run " + str(self.root / "installed") + "/install.sh", out)
+        self.assertIn("up to date", self.update()[1])
+
+    def test_diverged_checkout_is_left_untouched(self):
+        self.commit("upstream", "tool.py", "upstream")
+        self.commit("installed", "tool.py", "local")
+        with self.assertRaisesRegex(ValueError, "could not fast-forward"):
+            self.update()
+        self.assertEqual((self.root / "installed" / "tool.py").read_text(), "local")
+
+    def test_copy_outside_git_is_rejected(self):
+        (self.root / "copy").mkdir()
+        sys.path.insert(0, str(ROOT))
+        import agent_run
+        with self.assertRaisesRegex(ValueError, "not inside a Git checkout"):
+            agent_run.update(self.root / "copy")
+
+
 if __name__ == "__main__":
     unittest.main()
