@@ -10,6 +10,7 @@ agent-run --mem 4G --cores 4 --est 10m --label "Build" -- make test
 agent-run --status
 agent-run --stats
 agent-run --dashboard
+agent-run --update
 ```
 
 Add `~/.local/bin` to `PATH` if needed. Arguments after `--` go straight to the
@@ -25,6 +26,15 @@ Use `--java-cores` to append `-XX:ActiveProcessorCount=<cores>` to the child's
 needed. Reservations and live checks are advisory. Commands launched outside
 the runner, or jobs that use more than their estimates, can still saturate the
 machine.
+
+## Updating
+
+`agent-run --update` fast-forwards the Git checkout that holds the running
+`agent_run.py` to its branch's upstream. The checkout is found by resolving
+symlinks, so it works wherever the clone or the command link lives. Local
+commits or conflicting edits stop the update and leave the checkout
+unchanged. Run `install.sh` again when the update reports that it changed,
+and restart a running dashboard to load the new version.
 
 ## Budget and ordering
 

@@ -8,6 +8,8 @@ Shared, agent-agnostic skills for Codex, Claude Code, and other compatible agent
 
 Clone this repository and run `./install.sh`. It links skills into `~/.agents/skills` and commands into `~/.local/bin`, and clones cowtree into `~/.local/share/cowtree` if absent. Ensure the bin directory is on PATH. Set `AGENT_SKILLS_HOME`, `RAISTACK_BIN_HOME`, or `COWTREE_HOME` to change destinations. Existing non-symlinks are protected unless `--force` is passed; back them up first. Existing symlinks may be replaced. Configure other agents to load the skills directory, or link the individual skill directories into their own skill location.
 
+Update an installation from anywhere with `agent-run --update`, which fast-forwards the clone that the command links to, wherever it is.
+
 Run `agent-run --dashboard` and open `http://127.0.0.1:8767/` for the
 read-only machine budget, queue, completion history, and heavy processes
 outside the runner. Use `--port N` to choose another loopback port. The
