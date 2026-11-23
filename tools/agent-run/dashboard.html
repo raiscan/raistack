@@ -7,248 +7,465 @@
 <title>Agent Run Dashboard</title>
 <style>
   :root {
-    color-scheme: light dark;
-    --canvas: #edf1f6;
-    --panel: #fff;
-    --ink: #162237;
-    --muted: #475970;
-    --line: #cbd5e1;
-    --accent: #2256ad;
-    --ok: #19724c;
-    --warn: #9a4120;
+    --bg: #f3f4f6; --panel: #fff; --panel-2: #f8f9fb; --ink: #1b2230; --muted: #5f6b7c; --faint: #949eab;
+    --line: #dfe3e9; --line-2: #ebeef2; --track: #e6e9ee;
+    --accent: #2f62c9; --accent-soft: #e2eafa; --green: #1f7a4d; --green-soft: #e1f2e8;
+    --amber: #95600f; --amber-soft: #fcefd6; --red: #b0432b; --red-soft: #fae4dd; --violet: #6a4a94; --violet-soft: #eee7f7;
+    --teal: #12707a; --teal-soft: #dcf1f2; --orange: #a5521c; --orange-soft: #fbe9dc;
+    --shadow: 0 1px 2px #1b22300f;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --canvas: #101722;
-      --panel: #192331;
-      --ink: #eaf0f8;
-      --muted: #adbed2;
-      --line: #38495f;
-      --accent: #95baff;
-      --ok: #7dd9aa;
-      --warn: #ffbc95;
+      --bg: #10141a; --panel: #171c24; --panel-2: #1c222b; --ink: #e3e8ef; --muted: #93a0b1; --faint: #66727f;
+      --line: #28303a; --line-2: #212731; --track: #262d37;
+      --accent: #86aef5; --accent-soft: #1e2b44; --green: #6cc394; --green-soft: #1b3326;
+      --amber: #e6b660; --amber-soft: #352a14; --red: #ef8f74; --red-soft: #3a211a; --violet: #c0a4e6; --violet-soft: #2a2340;
+      --teal: #6fcfd8; --teal-soft: #173337; --orange: #f0a673; --orange-soft: #3a2618;
+      --shadow: none;
     }
   }
   * { box-sizing: border-box }
-  body {
-    margin: 0;
-    background: var(--canvas);
-    color: var(--ink);
-    font: 15px/1.45 system-ui, sans-serif;
-    font-variant-numeric: tabular-nums;
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased }
+  .num { font-variant-numeric: tabular-nums; white-space: nowrap }
+  .mono { font: 11.5px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace }
+  .muted { color: var(--muted) } .faint { color: var(--faint) }
+  [hidden] { display: none !important }
+  .i { width: 14px; height: 14px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; vertical-align: -2px }
+  .i.sm { width: 12px; height: 12px; stroke-width: 2.2 }
+  .i.lg { width: 16px; height: 16px }
+
+  header { position: sticky; top: 0; z-index: 2; background: color-mix(in srgb, var(--bg) 86%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line) }
+  .bar { max-width: 1200px; margin: auto; padding: 10px 24px; display: flex; align-items: center; gap: 10px }
+  .mark { width: 24px; height: 24px; border-radius: 7px; background: var(--accent); color: var(--panel); display: grid; place-items: center }
+  .mark .i { width: 15px; height: 15px; stroke-width: 2.4 }
+  h1 { font-size: 14px; font-weight: 650; margin: 0; letter-spacing: -.01em }
+  .host { display: inline-flex; gap: 5px; align-items: center; color: var(--faint); font-size: 12px; padding-left: 10px; border-left: 1px solid var(--line) }
+  .status { margin-left: auto; display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted) }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint) }
+  .status[data-state="live"] .dot { background: var(--green); box-shadow: 0 0 0 3px var(--green-soft); animation: pulse 2s ease-in-out infinite }
+  .status[data-state="live"] b { color: var(--green) }
+  .status[data-state="error"] .dot { background: var(--red) } .status[data-state="error"] b { color: var(--red) }
+  @keyframes pulse { 50% { box-shadow: 0 0 0 5px transparent } }
+  @media (prefers-reduced-motion: reduce) { .dot, .spin { animation: none !important } }
+
+  main { max-width: 1200px; margin: auto; padding: 20px 24px 36px }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow) }
+  .warnings { display: flex; gap: 10px; margin: 0 0 16px; padding: 9px 14px; border-radius: 8px; background: var(--amber-soft); color: var(--amber); font-size: 12px }
+  .warnings ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 2px }
+
+  /* Overview */
+  .overview { display: grid; grid-template-columns: 1.45fr 1.45fr 1fr 1fr; margin-bottom: 8px }
+  .legend { justify-content: flex-end; margin: 0 4px 20px }
+  .stat { padding: 14px 18px 13px; border-left: 1px solid var(--line-2); min-width: 0; display: flex; flex-direction: column }
+  .stat:first-child { border-left: 0 }
+  .label { display: flex; align-items: center; gap: 6px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .08em; font-weight: 650; color: var(--muted) }
+  .value { font-size: 24px; font-weight: 600; letter-spacing: -.02em; line-height: 1.2; margin: 5px 0 9px; font-variant-numeric: tabular-nums; white-space: nowrap }
+  .value small { font-size: 12.5px; font-weight: 500; color: var(--muted); letter-spacing: 0; margin: 0 8px 0 3px }
+  .value .bad { color: var(--red) }
+  .stat > small { font-size: 11.5px; color: var(--muted); margin-top: auto }
+  .budget { position: relative; height: 8px; border-radius: 4px; background: var(--track); margin-bottom: 9px }
+  .budget > i { position: absolute; top: 0; bottom: 0; border-radius: 4px }
+  .budget .reserved { left: 0; background: var(--accent); transition: width .4s ease }
+  .budget .desk { right: 0; border-radius: 0 4px 4px 0; background: repeating-linear-gradient(135deg, var(--faint) 0 1.5px, transparent 1.5px 4px); opacity: .7 }
+  .budget .live { width: 3px; top: -3px; bottom: -3px; margin-left: -1.5px; background: var(--ink); border: 1px solid var(--panel); box-sizing: content-box; transition: left .4s ease }
+  .key { display: flex; flex-wrap: wrap; gap: 2px 10px; font-size: 11px; color: var(--muted); margin-bottom: 6px }
+  .key i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 4px; vertical-align: -.5px }
+  .key .k-res { background: var(--accent) } .key .k-live { width: 3px; background: var(--ink) }
+  .key .k-desk { background: repeating-linear-gradient(135deg, var(--faint) 0 1.5px, transparent 1.5px 4px) }
+
+  section { margin-bottom: 24px }
+  .head { display: flex; align-items: center; gap: 8px; margin: 0 2px 9px }
+  .head > .i { color: var(--muted) }
+  h2 { margin: 0; font-size: 13.5px; font-weight: 650 }
+  .count { font-size: 11px; font-weight: 600; min-width: 20px; text-align: center; padding: 1px 6px; border-radius: 10px; background: var(--track); color: var(--muted); font-variant-numeric: tabular-nums }
+  .more { margin-left: auto; border: 0; background: none; padding: 2px 4px; font: inherit; font-size: 12px; font-weight: 600; color: var(--accent); cursor: pointer }
+  .more:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px }
+  .hint { margin-left: auto; display: inline-flex; gap: 5px; align-items: center; font-size: 11.5px; color: var(--faint) }
+
+  /* Tables */
+  .table { overflow-x: auto }
+  table { border-collapse: collapse; width: 100%; text-align: left }
+  th { padding: 8px 14px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em; font-weight: 650; color: var(--muted); white-space: nowrap; border-bottom: 1px solid var(--line); background: var(--panel-2) }
+  thead th:first-child { border-top-left-radius: 10px } thead th:last-child { border-top-right-radius: 10px }
+  td { padding: 9px 14px; border-bottom: 1px solid var(--line-2); vertical-align: middle }
+  tbody tr:last-child td { border-bottom: 0 }
+  tbody tr:hover td { background: var(--panel-2) }
+  .r { text-align: right }
+  td.grow { width: 100%; max-width: 0 }
+  td.lead { width: 44px; padding-right: 0 }
+  .pos { color: var(--faint); font-weight: 600 }
+  .state { width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; background: var(--track); color: var(--muted) }
+  .state.run { background: var(--accent-soft); color: var(--accent) }
+  .state.ok { background: var(--green-soft); color: var(--green) }
+  .state.fail { background: var(--red-soft); color: var(--red) }
+  .spin { animation: spin 2.4s linear infinite; transform-origin: center }
+  @keyframes spin { to { transform: rotate(360deg) } }
+  .title { display: flex; align-items: center; gap: 7px; font-weight: 600; overflow-wrap: anywhere }
+  .times { font-size: 10.5px; font-weight: 650; padding: 1px 6px; border-radius: 9px; background: var(--track); color: var(--muted) }
+  .sub { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 12px; margin-top: 3px; font-size: 11.5px; color: var(--muted) }
+  .sub > span { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 100% }
+  .sub .i { color: var(--faint) }
+  .sub .mono { color: var(--accent) }
+  .res { display: flex; gap: 12px; color: var(--muted) }
+  .res span { display: inline-flex; gap: 4px; align-items: center; color: var(--ink) }
+  .res .i { color: var(--faint) }
+  .empty { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 18px; color: var(--muted); font-size: 12px }
+  .empty .i { color: var(--faint) }
+  .progress { width: 170px }
+  .progress .line { display: flex; justify-content: space-between; gap: 8px; font-size: 12px }
+  .progress .track { height: 5px; border-radius: 3px; background: var(--track); overflow: hidden; margin-top: 5px }
+  .progress .track b { display: block; height: 100%; background: var(--accent); border-radius: 3px; transition: width .4s ease }
+  .progress.over .track b { background: var(--amber) } .progress.over .line .faint { color: var(--amber) }
+
+  .chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; line-height: 1; padding: 4px 7px; border-radius: 5px; background: var(--track); color: var(--muted); white-space: nowrap }
+  .chip.green { background: var(--green-soft); color: var(--green) }
+  .chip.amber { background: var(--amber-soft); color: var(--amber) }
+  .chip.red { background: var(--red-soft); color: var(--red) }
+  .chip.blue { background: var(--accent-soft); color: var(--accent) }
+  .chip.violet { background: var(--violet-soft); color: var(--violet) }
+  .chip.agent { padding: 2px 6px 2px 5px; font-size: 10.5px }
+  .chip.claude { background: var(--orange-soft); color: var(--orange) }
+  .chip.codex { background: var(--teal-soft); color: var(--teal) }
+  .chip.quiet { background: transparent; box-shadow: inset 0 0 0 1px var(--line); color: var(--muted) }
+  .chip.quiet .i { color: var(--faint) }
+  .chips { display: flex; flex-wrap: wrap; gap: 4px }
+  .show-sm { display: none !important }
+  .path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px }
+  .split h3 { display: flex; align-items: center; gap: 6px; margin: 0; padding: 9px 14px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); border-bottom: 1px solid var(--line); background: var(--panel-2); border-radius: 10px 10px 0 0 }
+  .split td { padding: 7px 14px }
+  .bar-cell { min-width: 90px }
+  .mini { height: 4px; border-radius: 2px; background: var(--track); overflow: hidden }
+  .mini b { display: block; height: 100%; background: var(--muted); opacity: .55; border-radius: 2px }
+  .repo { margin-bottom: 12px }
+  .repo h3 { display: flex; align-items: center; gap: 6px; margin: 0 2px 7px; font-size: 12px; font-weight: 600; color: var(--muted) }
+
+  @media (max-width: 900px) {
+    .overview { grid-template-columns: 1fr 1fr }
+    .stat:nth-child(3) { border-left: 0 } .stat:nth-child(-n+2) { border-bottom: 1px solid var(--line-2) }
+    .split { grid-template-columns: 1fr }
   }
-  main { width: min(100% - 2rem, 72rem); margin: 2rem auto 4rem }
-  header { display: flex; justify-content: space-between; align-items: baseline; gap: .75rem 1.5rem; flex-wrap: wrap }
-  h1 { font-size: clamp(1.55rem, 4vw, 2.3rem); letter-spacing: -.035em; margin: 0 }
-  h2 { font-size: 1.12rem; letter-spacing: -.01em; margin: 0 0 .65rem }
-  h3 { font-size: 1rem; margin: 0 0 .45rem }
-  section { margin-top: 1.5rem }
-  p { margin: 0 }
-  .muted { color: var(--muted) }
-  #connection[data-state="live"] { color: var(--ok) }
-  #connection[data-state="error"], #warnings { color: var(--warn) }
-  #warnings:empty { display: none }
-  #warnings { padding-left: 1.4rem }
-  .grid { display: grid; gap: .65rem; grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr)) }
-  .panel { min-width: 0; overflow-wrap: anywhere; background: var(--panel); border: 1px solid var(--line); border-radius: .65rem; padding: .8rem 1rem }
-  .capacity p { margin: .3rem 0 }
-  .capacity strong { font-size: 1.22rem }
-  meter { display: block; width: 100%; height: .75rem; accent-color: var(--accent); margin: .35rem 0 .55rem }
-  .jobs { display: grid; gap: .55rem }
-  .job { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: .45rem 1rem }
-  .job > * { min-width: 0 }
-  .job p { margin: .2rem 0 }
-  .job .detail { color: var(--muted); font-size: .88rem }
-  .job code { color: var(--accent); font: .85rem/1.45 ui-monospace, monospace }
-  .job .owner { grid-column: 1 / -1; border-top: 1px solid var(--line); padding-top: .4rem }
-  .repo + .repo { margin-top: .75rem }
-  .repo .jobs + h3 { margin-top: .8rem }
-  .repo .job { border-radius: .35rem }
-  .processes { margin: 0; padding: 0; list-style: none }
-  .processes li { display: flex; justify-content: space-between; align-items: baseline; gap: .55rem; padding: .3rem 0 }
-  .processes li + li { border-top: 1px solid var(--line) }
-  .processes li span:last-child { flex-shrink: 0; color: var(--muted) }
-  @media (max-width: 36rem) {
-    main { margin-top: 1.2rem }
-    .job { grid-template-columns: 1fr }
+  @media (max-width: 600px) {
+    .bar, main { padding-left: 16px; padding-right: 16px }
+    .host, .hide-sm, .hint { display: none }
+    .show-sm { display: flex !important; margin-top: 6px }
+    .overview { grid-template-columns: 1fr }
+    .stat { border-left: 0; border-bottom: 1px solid var(--line-2) } .stat:last-child { border-bottom: 0 }
+    .progress { width: 100px } .progress .line .faint { display: none }
+    td { padding: 9px 10px }
   }
 </style>
 </head>
 <body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-logo" viewBox="0 0 24 24"><path d="M4 7h10M4 12h16M4 17h7"/><circle cx="18" cy="7" r="1.6"/><circle cx="15" cy="17" r="1.6"/></symbol>
+  <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx=".5"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></symbol>
+  <symbol id="i-mem" viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="10" rx="1.5"/><path d="M6 11v2M10 11v2M14 11v2M18 11v2M6 17v3M18 17v3"/></symbol>
+  <symbol id="i-queue" viewBox="0 0 24 24"><path d="M8 6h12M8 12h12M8 18h12"/><path d="M4 6h.01M4 12h.01M4 18h.01" stroke-width="3"/></symbol>
+  <symbol id="i-run" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/></symbol>
+  <symbol id="i-wait" viewBox="0 0 24 24"><path d="M6 2h12M6 22h12M7 2c0 5 10 5 10 10S7 17 7 22M17 2c0 5-10 5-10 10s10 5 10 10"/></symbol>
+  <symbol id="i-history" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5H9l2 2.5h8.5A1.5 1.5 0 0 1 21 9v9.5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z"/></symbol>
+  <symbol id="i-term" viewBox="0 0 24 24"><path d="M5 8l4 4-4 4M12 17h7"/></symbol>
+  <symbol id="i-agent" viewBox="0 0 24 24"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V4M9 14h.01M15 14h.01" /><circle cx="12" cy="3.5" r="1"/></symbol>
+  <symbol id="i-branch" viewBox="0 0 24 24"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="8" r="2.5"/><path d="M6 8.5v7M18 10.5c0 4-6 3-11 6"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.3 3.9L2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></symbol>
+  <symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 0 1 4.9.8c0 1.7-2.4 2.2-2.4 3.7M12 17h.01"/></symbol>
+  <symbol id="i-drain" viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15l12-7.5z"/></symbol>
+  <symbol id="i-slots" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></symbol>
+  <symbol id="i-flag" viewBox="0 0 24 24"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></symbol>
+  <symbol id="i-proc" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M7 6.5h.01M10 6.5h.01"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></symbol>
+</svg>
+<header><div class="bar">
+  <span class="mark" aria-hidden="true"><svg class="i"><use href="#i-logo"/></svg></span>
+  <h1>agent-run</h1>
+  <span class="host" id="host"></span>
+  <span class="status" id="connection" role="status"><span class="dot"></span><b id="state">Connecting</b><span class="faint num" id="updated"></span></span>
+</div></header>
 <main>
-  <header>
-    <h1>Agent Run Dashboard</h1>
-    <p class="muted" id="connection" role="status">Connecting…</p>
-  </header>
-  <ul id="warnings"></ul>
+  <div class="warnings" id="warnings" role="alert" hidden><svg class="i"><use href="#i-alert"/></svg><ul id="warning-list"></ul></div>
 
-  <section aria-labelledby="capacity-heading">
-    <h2 id="capacity-heading">Machine budget and live use</h2>
-    <div id="capacity" class="grid"></div>
+  <div class="card overview">
+    <div class="stat">
+      <div class="label"><svg class="i sm"><use href="#i-cpu"/></svg>CPU</div>
+      <div class="value" id="cpu-value">—</div>
+      <div class="budget" id="cpu-bar"></div>
+      <small id="cpu-note"></small>
+    </div>
+    <div class="stat">
+      <div class="label"><svg class="i sm"><use href="#i-mem"/></svg>Memory</div>
+      <div class="value" id="mem-value">—</div>
+      <div class="budget" id="mem-bar"></div>
+      <small id="mem-note"></small>
+    </div>
+    <div class="stat">
+      <div class="label"><svg class="i sm"><use href="#i-queue"/></svg>Queue</div>
+      <div class="value" id="queue-value">—</div>
+      <small id="queue-note"></small>
+    </div>
+    <div class="stat">
+      <div class="label"><svg class="i sm"><use href="#i-history"/></svg>Recent</div>
+      <div class="value" id="recent-value">—</div>
+      <small id="recent-note"></small>
+    </div>
+  </div>
+  <div class="key legend"><span><i class="k-res"></i>Reserved by queue</span><span><i class="k-live"></i>Live use</span><span><i class="k-desk"></i>Desktop reserve</span></div>
+
+  <section>
+    <div class="head"><svg class="i"><use href="#i-run"/></svg><h2>Running</h2><span class="count" id="running-count">0</span></div>
+    <div class="card table" id="running"></div>
   </section>
-  <section aria-labelledby="running-heading">
-    <h2 id="running-heading">Running leases</h2>
-    <div id="running" class="jobs"></div>
+  <section>
+    <div class="head"><svg class="i"><use href="#i-wait"/></svg><h2>Waiting</h2><span class="count" id="waiting-count">0</span>
+      <span class="hint" id="aging-hint"><svg class="i sm"><use href="#i-info"/></svg>Short jobs first; after aging, arrival order</span></div>
+    <div class="card table" id="waiting"></div>
   </section>
-  <section aria-labelledby="waiting-heading">
-    <h2 id="waiting-heading">Waiters in queue order</h2>
-    <div id="waiting" class="jobs"></div>
-  </section>
-  <section aria-labelledby="recent-heading">
-    <h2 id="recent-heading">Recent completions</h2>
-    <div id="recent" class="jobs"></div>
-  </section>
-  <section aria-labelledby="unmanaged-heading">
-    <h2 id="unmanaged-heading">Top processes outside agent-run</h2>
-    <div id="unmanaged" class="grid"></div>
-  </section>
-  <section id="maven" aria-labelledby="maven-heading" hidden>
-    <h2 id="maven-heading">Per-repository Maven queues</h2>
+  <section id="maven" hidden>
+    <div class="head"><svg class="i"><use href="#i-layers"/></svg><h2>Maven queues</h2></div>
     <div id="maven-queues"></div>
+  </section>
+  <section>
+    <div class="head"><svg class="i"><use href="#i-history"/></svg><h2>Recent completions</h2><span class="count" id="recent-count">0</span>
+      <button class="more" id="recent-more" type="button" hidden></button></div>
+    <div class="card table" id="recent"></div>
+  </section>
+  <section>
+    <div class="head"><svg class="i"><use href="#i-proc"/></svg><h2>Outside agent-run</h2><span class="hint">CPU: 100% is one core</span></div>
+    <div class="split" id="unmanaged"></div>
   </section>
 </main>
 
 <script>
-  const byId = id => document.getElementById(id);
+  const $ = id => document.getElementById(id);
   const fmt = new Intl.NumberFormat(undefined, {maximumFractionDigits: 1});
-  const date = new Intl.DateTimeFormat(undefined, {dateStyle: "short", timeStyle: "medium"});
-  const defined = value => typeof value === "number" && Number.isFinite(value);
-  const amount = value => defined(value) ? fmt.format(value) : "—";
-  const bytes = value => {
-    if (!defined(value)) return "—";
-    for (const [size, unit] of [[2 ** 30, "GiB"], [2 ** 20, "MiB"], [2 ** 10, "KiB"]]) {
-      if (value >= size) return `${amount(value / size)} ${unit}`;
-    }
-    return `${amount(value)} B`;
+  const clock = new Intl.DateTimeFormat(undefined, {timeStyle: "medium"});
+  const ok = v => typeof v === "number" && Number.isFinite(v);
+  const num = v => ok(v) ? fmt.format(v) : "—";
+  const bytes = v => {
+    if (!ok(v)) return "—";
+    for (const [size, unit] of [[2 ** 30, "GiB"], [2 ** 20, "MiB"], [2 ** 10, "KiB"]]) if (v >= size) return `${num(v / size)} ${unit}`;
+    return `${num(v)} B`;
   };
-  const duration = value => {
-    if (!defined(value)) return "—";
-    const seconds = Math.floor(value);
-    const minutes = Math.floor(seconds / 60);
-    const hours = Math.floor(minutes / 60);
-    if (hours) return `${hours}h ${minutes % 60}m`;
-    if (minutes) return `${minutes}m ${seconds % 60}s`;
-    return `${seconds}s`;
+  const dur = v => {
+    if (!ok(v)) return "—";
+    const s = Math.floor(v), m = Math.floor(s / 60), h = Math.floor(m / 60);
+    return h ? `${h}h ${String(m % 60).padStart(2, "0")}m` : m ? `${m}m ${String(s % 60).padStart(2, "0")}s` : `${s}s`;
   };
-  function node(tag, content, className) {
-    const el = document.createElement(tag);
-    if (content != null) el.textContent = content;
-    if (className) el.className = className;
-    return el;
-  }
-  function meter(label, value, max) {
-    const result = node("meter");
-    result.setAttribute("aria-label", label);
-    result.max = defined(max) && max > 0 ? max : 1;
-    result.value = defined(value) ? Math.max(0, Math.min(value, result.max)) : 0;
-    return result;
-  }
-  function renderCapacity(data) {
-    const cpu = node("article", null, "panel capacity");
-    cpu.append(node("h3", "CPU"), node("strong", `${amount(data.busy_cores)} of ${amount(data.total_cores)} cores busy`),
-               node("p", `${amount(data.load_1m)} one-minute load`, "muted"),
-               meter("Busy cores relative to online cores", data.busy_cores, data.total_cores),
-               node("p", `${amount(data.reserved_cores)} of ${amount(data.cores)} queue cores reserved`),
-               node("p", `${amount(data.reserve_cores)} cores for desktop · ${amount(data.live_cores)} live headroom`, "muted"));
-    const memory = node("article", null, "panel capacity");
-    memory.append(node("h3", "Memory"), node("strong", `${bytes(data.mem_available)} MemAvailable`),
-                  node("p", `${bytes(data.mem_used)} in use · ${bytes(data.total_mem)} total`, "muted"),
-                  meter("Memory in use", data.mem_used, data.total_mem),
-                  node("p", `${bytes(data.reserved_mem)} of ${bytes(data.mem)} queue memory reserved`),
-                  node("p", `${bytes(data.reserve_mem)} for desktop · ${bytes(data.live_mem)} live headroom`, "muted"));
-    byId("capacity").replaceChildren(cpu, memory);
-  }
-  function jobCard(job, kind) {
-    const card = node("article", null, "panel job");
-    const identity = node("div");
-    const details = node("div");
-    const position = job.position == null ? "" : `${job.position}. `;
-    identity.append(node("strong", position + (job.label || job.id || "Job")));
-    if (job.command) {
-      const command = node("p");
-      command.append(node("code", job.command));
-      identity.append(command);
+  const ago = t => ok(t) ? `${dur(Date.now() / 1000 - t)} ago` : "—";
+  const RECENT_ROWS = 8;
+  let showAllRecent = false, lastRecent = [];
+  const AGENT = /^(claude|codex|opencode|gemini|aider|cursor|goose|amp)/i;
+  const PLUMBING = /^(systemd|init|bash|zsh|sh|fish|dash|sudo|env|python3?|node|t3code)$/;
+
+  function el(tag, attrs, ...kids) {
+    const e = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs || {})) {
+      if (v == null || v === false) continue;
+      if (k === "class") e.className = v; else if (k === "style") e.style.cssText = v; else e.setAttribute(k, v);
     }
-    if (job.cwd || job.worktree) identity.append(node("p", job.cwd || job.worktree, "detail"));
-    if (kind === "recent") {
-      details.append(node("p", `Waited ${duration(job.wait_seconds)} · held ${duration(job.hold_seconds)}`),
-                     node("p", `Exit ${job.exit_code} · ${date.format(new Date(job.time * 1000))}`, "detail"));
-    } else {
-      const pid = job.pid == null ? "PID unavailable" : `PID ${job.pid}`;
-      details.append(node("p", `${pid} · ${amount(job.cores)} cores · ${bytes(job.mem)}`, "detail"));
-      if (kind === "waiting") {
-        details.append(node("p", `Waited ${duration(job.wait_seconds)} · ${job.admission}`));
-      } else {
-        const remaining = job.remaining_seconds == null ? "" : ` · ~${duration(job.remaining_seconds)} left`;
-        details.append(node("p", `Held ${duration(job.held_seconds)}${remaining}`));
-      }
-      if (job.liveness === "unverified") details.append(node("p", "Lease ownership unverified", "detail"));
-    }
-    card.append(identity, details);
-    if (job.owner_chain?.length) {
-      const chain = job.owner_chain.map(item => `${item.name || "process"} [${item.pid}]`).join(" ← ");
-      card.append(node("p", `Process ancestry: ${chain}`, "owner detail"));
-    }
-    return card;
+    e.append(...kids.flat().filter(k => k != null && k !== false));
+    return e;
   }
-  function renderJobs(target, jobs, kind, emptyMessage) {
-    target.replaceChildren(...(jobs.length
-      ? jobs.map(job => jobCard(job, kind))
-      : [node("p", emptyMessage, "panel muted")]));
+  function icon(name, cls = "") {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("class", `i ${cls}`.trim());
+    svg.setAttribute("aria-hidden", "true");
+    const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+    use.setAttribute("href", `#i-${name}`);
+    svg.append(use);
+    return svg;
   }
-  function processPanel(title, rows, emptyMessage) {
-    const panel = node("article", null, "panel");
-    panel.append(node("h3", title));
-    if (!rows.length) {
-      panel.append(node("p", emptyMessage, "muted"));
-      return panel;
+  const meta = (name, content, title) => el("span", {title}, icon(name, "sm"), content);
+  const shortPath = p => {
+    if (!p) return null;
+    const parts = p.split("/").filter(Boolean);
+    return meta("folder", el("span", {class: "path"}, parts.length > 2 ? "…/" + parts.slice(-2).join("/") : p), p);
+  };
+  // The launching agent is the first recognised agent in the ancestry; otherwise name the nearest non-shell parent.
+  function origin(chain) {
+    if (!chain?.length) return null;
+    const title = chain.map(p => `${p.name || "process"} [${p.pid}]`).join(" ← ");
+    const agent = chain.slice(1).find(p => AGENT.test(p.name || ""));
+    if (agent) {
+      const name = agent.name.toLowerCase();
+      const tone = name.startsWith("claude") ? "claude" : name.startsWith("codex") ? "codex" : "";
+      return el("span", {class: `chip agent ${tone}`, title}, icon("agent", "sm"), name);
     }
-    const list = node("ul", null, "processes");
-    for (const process of rows) {
-      const row = node("li");
-      const cpu = defined(process.cpu_percent) ? `${amount(process.cpu_percent)}%` : "— CPU";
-      row.append(node("span", `${process.name || "process"} [${process.pid}]`),
-                 node("span", `${cpu} · ${bytes(process.rss)}`));
-      list.append(row);
+    const parent = chain.slice(1).find(p => !PLUMBING.test(p.name || ""));
+    return parent ? meta("branch", `via ${parent.name}`, title) : null;
+  }
+  const res = job => el("div", {class: "res num"},
+    el("span", {title: "Reserved cores"}, icon("cpu", "sm"), num(job.cores)),
+    el("span", {title: "Reserved memory"}, icon("mem", "sm"), bytes(job.mem)));
+
+  const REASONS = [
+    [/ready/, "green", "play"], [/drain|aged/, "quiet", "drain"], [/exceed/, "red", "alert"],
+    [/unknown/, "", "help"], [/slot/, "blue", "slots"], [/exclusive/, "violet", "lock"],
+    [/worktree/, "blue", "branch"], [/priority|earlier/, "blue", "flag"],
+    [/cpu/, null, "cpu"], [/memory/, null, "mem"],
+  ];
+  const MAVEN_LABELS = {memory: "Memory headroom", cpu: "CPU headroom", slots: "Admission slots", exclusive: "Exclusive job running",
+    worktree: "Worktree busy", priority: "Higher-priority job", draining: "Draining for aged job", ready: "Ready", unknown: "Admission unknown"};
+  function reasonChip(reason) {
+    const text = MAVEN_LABELS[reason] || reason || "Admission unknown";
+    const r = text.toLowerCase();
+    const [, tone, name] = REASONS.find(([re]) => re.test(r)) || [null, "", "help"];
+    return el("span", {class: `chip ${tone ?? (r.includes("live") ? "amber" : "blue")}`}, icon(name, "sm"), text);
+  }
+  const reasons = (text, cls = "") => el("div", {class: `chips ${cls}`}, (text || "unknown").split(" · ").map(reasonChip));
+
+  function table(headers, rows, empty, emptyIcon) {
+    if (!rows.length) return [el("div", {class: "empty"}, icon(emptyIcon, "lg"), empty)];
+    return [el("table", null,
+      el("thead", null, el("tr", null, headers.map(([t, c]) => el("th", {class: c}, t)))),
+      el("tbody", null, rows))];
+  }
+  function identity(job, times, extra) {
+    const label = job.label || job.id || "Job";
+    const command = job.command && job.command.split(" ")[0] !== label ? meta("term", el("span", {class: "mono"}, job.command)) : null;
+    return el("td", {class: "grow"},
+      el("div", {class: "title"}, label, times > 1 ? el("span", {class: "times num"}, `×${times}`) : null,
+        job.liveness === "unverified" ? el("span", {class: "chip amber", title: "Lease ownership could not be verified"}, icon("alert", "sm"), "Unverified") : null),
+      el("div", {class: "sub"}, command, shortPath(job.cwd || job.worktree), origin(job.owner_chain)), extra);
+  }
+  function progress(job) {
+    if (!ok(job.held_seconds)) return el("td", {class: "num"}, "—");
+    const estimate = job.estimate || (ok(job.remaining_seconds) ? job.held_seconds + job.remaining_seconds : null);
+    if (!ok(estimate) || estimate <= 0) return el("td", {class: "num"}, dur(job.held_seconds));
+    const over = job.held_seconds > estimate;
+    const note = over ? `${dur(job.held_seconds - estimate)} over` : `${dur(estimate - job.held_seconds)} left`;
+    return el("td", {class: `progress${over ? " over" : ""}`, title: `Estimated ${dur(estimate)}`},
+      el("div", {class: "line num"}, el("span", null, dur(job.held_seconds)), el("span", {class: "faint"}, note)),
+      el("div", {class: "track"}, el("b", {style: `width:${Math.min(100, job.held_seconds / estimate * 100)}%`})));
+  }
+  const lead = (cls, name, spin) => el("td", {class: "lead"}, el("div", {class: `state ${cls}`}, icon(name, spin ? "sm spin" : "sm")));
+
+  function running(jobs, empty) {
+    return table([[""], ["Job"], ["Reserved", "hide-sm"], ["PID", "hide-sm"], ["Held"]],
+      jobs.map(job => el("tr", null, lead("run", "run", true), identity(job),
+        el("td", {class: "hide-sm"}, res(job)), el("td", {class: "num faint hide-sm"}, job.pid ?? "—"), progress(job))),
+      empty, "check");
+  }
+  // Consecutive waiters with identical identity, reservation and reason are folded into one row.
+  function fold(jobs) {
+    const groups = [];
+    for (const job of jobs) {
+      const key = [job.label, job.command, job.cwd || job.worktree, job.cores, job.mem, job.admission].join("\0");
+      const last = groups.at(-1);
+      if (last && last.key === key) last.jobs.push(job); else groups.push({key, jobs: [job]});
     }
-    panel.append(list);
-    return panel;
+    return groups;
   }
-  function renderMaven(repos) {
-    byId("maven").hidden = !repos.length;
-    byId("maven-queues").replaceChildren(...repos.map(repo => {
-      const panel = node("article", null, "panel repo");
-      const running = node("div", null, "jobs");
-      const waiting = node("div", null, "jobs");
-      panel.append(node("h3", repo.repo), node("h3", "Running"), running, node("h3", "Waiting"), waiting);
-      renderJobs(running, repo.running, "running", "No running Maven leases.");
-      renderJobs(waiting, repo.waiting, "waiting", "No waiting Maven requests.");
-      return panel;
-    }));
+  function waiting(jobs, empty) {
+    return table([["#"], ["Job"], ["Reserved", "hide-sm"], ["Waiting on", "hide-sm"], ["Waited", "r"]],
+      fold(jobs).map(({jobs: group}) => {
+        const [first] = group, last = group.at(-1);
+        const pos = group.length > 1 ? `${first.position}–${last.position}` : first.position;
+        const waited = group.length > 1 && Math.floor(first.wait_seconds) !== Math.floor(last.wait_seconds)
+          ? `${dur(last.wait_seconds)}–${dur(first.wait_seconds)}` : dur(first.wait_seconds);
+        return el("tr", null, el("td", {class: "lead pos num"}, pos ?? ""), identity(first, group.length, reasons(first.admission, "show-sm")),
+          el("td", {class: "hide-sm"}, res(first)), el("td", {class: "hide-sm"}, reasons(first.admission)),
+          el("td", {class: "num r"}, waited));
+      }), empty, "check");
   }
+  function recent(jobs) {
+    return table([[""], ["Job"], ["Waited", "r hide-sm"], ["Ran", "r"], ["Finished", "r"]],
+      jobs.map(job => {
+        const good = job.exit_code === 0;
+        return el("tr", null, lead(good ? "ok" : "fail", good ? "check" : "x"),
+          el("td", {class: "grow"}, el("div", {class: "title"}, job.label || "Job", good ? null : el("span", {class: "chip red"}, `exit ${job.exit_code}`)),
+            el("div", {class: "sub"}, shortPath(job.cwd))),
+          el("td", {class: "num r hide-sm"}, dur(job.wait_seconds)), el("td", {class: "num r"}, dur(job.hold_seconds)),
+          el("td", {class: "num r faint", title: ok(job.time) ? new Date(job.time * 1000).toLocaleString() : null}, ago(job.time)));
+      }), "No completions recorded yet.", "history");
+  }
+  function renderRecent() {
+    const more = $("recent-more");
+    more.hidden = lastRecent.length <= RECENT_ROWS;
+    more.textContent = showAllRecent ? "Show fewer" : `Show all ${lastRecent.length}`;
+    $("recent").replaceChildren(...recent(showAllRecent ? lastRecent : lastRecent.slice(0, RECENT_ROWS)));
+  }
+  $("recent-more").addEventListener("click", () => { showAllRecent = !showAllRecent; renderRecent(); });
+  function processes(title, name, rows, metric, empty) {
+    const max = Math.max(...rows.map(metric), 1);
+    const body = rows.length ? el("table", null, el("tbody", null, rows.map(p => el("tr", null,
+      el("td", {class: "grow"}, el("div", {class: "title"}, p.name || "process"), el("div", {class: "sub num"}, `PID ${p.pid}`)),
+      el("td", {class: "num r"}, ok(p.cpu_percent) ? `${num(p.cpu_percent)}%` : "—"),
+      el("td", {class: "num r"}, bytes(p.rss)),
+      el("td", {class: "bar-cell"}, el("div", {class: "mini"}, el("b", {style: `width:${metric(p) / max * 100}%`}))))))) :
+      el("div", {class: "empty"}, icon("info", "lg"), empty);
+    return el("div", {class: "card table"}, el("h3", null, icon(name, "sm"), title), body);
+  }
+
+  function budgetBar(target, total, reserved, used, desk) {
+    const pct = v => ok(v) && total > 0 ? Math.max(0, Math.min(100, v / total * 100)) : 0;
+    target.replaceChildren(
+      el("i", {class: "desk", style: `width:${pct(desk)}%`}),
+      el("i", {class: "reserved", style: `width:${pct(reserved)}%`}),
+      ok(used) ? el("i", {class: "live", style: `left:${pct(used)}%`}) : null);
+  }
+  function overview(d, m) {
+    $("cpu-value").replaceChildren(...(ok(m.busy_cores)
+      ? [num(m.busy_cores), el("small", null, `of ${num(m.total_cores)} cores busy`)]
+      : [el("span", {class: "faint"}, "…"), el("small", null, "sampling")]));
+    budgetBar($("cpu-bar"), m.total_cores, m.reserved_cores, m.busy_cores, m.reserve_cores);
+    $("cpu-note").textContent = `${num(m.reserved_cores)} of ${num(m.cores)} reserved · load ${num(m.load_1m)} · ${num(m.live_cores)} free`;
+    $("mem-value").replaceChildren(bytes(m.mem_available), el("small", null, "available"));
+    budgetBar($("mem-bar"), m.total_mem, m.reserved_mem, m.mem_used, m.reserve_mem);
+    $("mem-note").textContent = `${bytes(m.reserved_mem)} of ${bytes(m.mem)} reserved · ${bytes(m.live_mem)} free`;
+    $("queue-value").replaceChildren(String(d.running.length), el("small", null, "running"), String(d.waiting.length), el("small", null, "waiting"));
+    const oldest = Math.max(0, ...d.waiting.map(j => j.wait_seconds || 0));
+    $("queue-note").textContent = d.waiting.length ? `Longest wait ${dur(oldest)}` : "Nothing waiting";
+    const failed = d.recent.filter(j => j.exit_code !== 0).length;
+    $("recent-value").replaceChildren(String(d.recent.length - failed), el("small", null, "ok"),
+      ...(failed ? [el("span", {class: "bad"}, String(failed)), el("small", null, "failed")] : []));
+    $("recent-note").textContent = d.recent.length ? `Last finished ${ago(d.recent[0].time)}` : "No completions yet";
+    $("host").replaceChildren(icon("cpu", "sm"), `${num(m.total_cores)} cores`, icon("mem", "sm"), bytes(m.total_mem));
+    $("aging-hint").lastChild.textContent = `Short jobs first; after ${dur(m.aging)}, arrival order`;
+  }
+
   async function refresh() {
-    const connection = byId("connection");
+    const status = $("connection");
+    let delay = 2000;
     try {
       const response = await fetch("/api/status", {cache: "no-store"});
-      if (!response.ok) throw new Error("Dashboard unavailable");
-      const data = await response.json();
-      renderCapacity(data.machine);
-      renderJobs(byId("running"), data.running, "running", "No running leases.");
-      renderJobs(byId("waiting"), data.waiting, "waiting", "No jobs waiting.");
-      renderJobs(byId("recent"), data.recent, "recent", "No recent completions.");
-      byId("unmanaged").replaceChildren(
-        processPanel("By CPU", data.unmanaged.cpu, data.unmanaged.cpu_sampled
-          ? "No CPU activity measured." : "Waiting for the next CPU sample."),
-        processPanel("By resident memory", data.unmanaged.rss, "No resident processes found."));
-      renderMaven(data.maven);
-      byId("warnings").replaceChildren(...data.warnings.map(warning => node("li", warning)));
-      connection.textContent = `Live · updated ${date.format(new Date(data.captured_at * 1000))}`;
-      connection.dataset.state = "live";
+      if (!response.ok) throw new Error(response.statusText);
+      const d = await response.json();
+      delay = (d.refresh_seconds || 2) * 1000;
+      overview(d, d.machine);
+      $("running-count").textContent = d.running.length;
+      $("waiting-count").textContent = d.waiting.length;
+      $("recent-count").textContent = d.recent.length;
+      $("running").replaceChildren(...running(d.running, "Nothing running."));
+      $("waiting").replaceChildren(...waiting(d.waiting, "Queue is clear."));
+      lastRecent = d.recent;
+      renderRecent();
+      $("unmanaged").replaceChildren(
+        processes("By CPU", "cpu", d.unmanaged.cpu, p => p.cpu_percent || 0,
+          d.unmanaged.cpu_sampled ? "No CPU activity measured." : "Waiting for the next CPU sample."),
+        processes("By memory", "mem", d.unmanaged.rss, p => p.rss || 0, "No resident processes found."));
+      $("maven").hidden = !d.maven.length;
+      $("maven-queues").replaceChildren(...d.maven.map(repo => el("div", {class: "repo"},
+        el("h3", {title: repo.repo}, icon("folder", "sm"), repo.repo.split("/").filter(Boolean).pop() || repo.repo),
+        el("div", {class: "card table"}, running(repo.running, "No Maven jobs running.")),
+        repo.waiting.length ? el("div", {class: "card table", style: "margin-top:8px"}, waiting(repo.waiting, "")) : null)));
+      $("warning-list").replaceChildren(...d.warnings.map(w => el("li", null, w)));
+      $("warnings").hidden = !d.warnings.length;
+      status.dataset.state = "live";
+      $("state").textContent = "Live";
+      $("updated").textContent = clock.format(new Date(d.captured_at * 1000));
     } catch {
-      connection.textContent = "Refresh failed · retrying";
-      connection.dataset.state = "error";
+      status.dataset.state = "error";
+      $("state").textContent = "Reconnecting";
     } finally {
-      window.setTimeout(refresh, 2000);
+      setTimeout(refresh, delay);
     }
   }
   refresh();

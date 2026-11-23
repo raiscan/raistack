@@ -83,7 +83,11 @@ The page refreshes every two seconds. It shows the configured budget,
 desktop reserves, busy CPU cores, Linux load and available memory, active reservations,
 running leases with process ancestry, waiters with observed admission
 reasons, recent completion timings, and processes outside agent-run ranked
-by sampled CPU and resident memory. CPU is measured over consecutive
+by sampled CPU and resident memory. Consecutive waiters with the same
+label, command, directory, reservation and admission reason are folded
+into one row with a count. A job's launching agent is the first
+recognised agent process in its ancestry; the full ancestry is in the
+tooltip. CPU is measured over consecutive
 samples, with 100% equal to one logical core. The queue view is a lock-free
 snapshot, so entries and reasons can change between refreshes. The dashboard
 reads existing files and Linux counters without creating state, taking queue
