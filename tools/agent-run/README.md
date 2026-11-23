@@ -7,6 +7,7 @@ support. The crash test also uses Linux pidfds (Linux 5.3+).
 ```sh
 ln -s "$PWD/agent-run" ~/.local/bin/agent-run
 agent-run --mem 4G --cores 4 --est 10m --label "Build" -- make test
+agent-run --vram 10G --cores 2 --mem 4G --label "Whisper" -- python transcribe.py
 agent-run --status
 agent-run --stats
 agent-run --dashboard
@@ -26,6 +27,35 @@ Use `--java-cores` to append `-XX:ActiveProcessorCount=<cores>` to the child's
 needed. Reservations and live checks are advisory. Commands launched outside
 the runner, or jobs that use more than their estimates, can still saturate the
 machine.
+
+## GPU memory
+
+Pass `--vram SIZE` for any job that loads a model or other work onto the GPU.
+VRAM is reserved like cores and memory: jobs whose combined `--vram` exceeds
+the GPU budget wait, and the live check also waits while the GPU's measured
+free VRAM (minus the reserve) is below the request. Jobs without `--vram` never
+wait for the GPU. A `--vram` request fails immediately when no GPU budget is
+available or the request is larger than the budget.
+
+The GPU is read from the amdgpu sysfs counters
+(`/sys/class/drm/card*/device/mem_info_vram_*`). By default the card with the
+most VRAM is used, which skips integrated graphics. Set `gpu` in `config.json`
+to a card name such as `"card1"` or a PCI address such as `"0000:03:00.0"`
+(stable across boots) to choose one. The default reserve is the smaller of
+1 GiB or one eighth of VRAM, on top of whatever the desktop is already using.
+`reserve_vram` and `max_vram` override it. Other GPU vendors are not detected
+yet, so `--vram` requests fail on them.
+
+Add `--gpu-exclusive` when a job should have the GPU to itself, for example a
+model run that would otherwise share GPU compute with another model. It
+waits until no other `--vram` or exclusive job is running, and while it runs
+no other GPU job starts. Jobs without GPU flags are unaffected. Combine it with
+`--vram` to also apply the VRAM checks.
+
+Reservations only cover jobs that go through agent-run. A model server that
+stays loaded outside the queue (for example a resident Ollama or llama.cpp
+server) shows up only through the live check. A job that keeps a model resident
+after its command exits is not accounted for.
 
 ## Updating
 
@@ -53,7 +83,9 @@ is optional. Example with lower caps and the default desktop reserves and aging:
   "reserve_mem": "6G",
   "max_cores": 20,
   "max_mem": "18G",
-  "aging_seconds": 300
+  "aging_seconds": 300,
+  "gpu": "0000:03:00.0",
+  "reserve_vram": "1G"
 }
 ```
 

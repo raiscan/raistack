@@ -11,8 +11,8 @@ import stat
 import threading
 import time
 
-from agent_run import (SLOTS, budget_for, display_command, headroom, host_resources,
-                       ordered_waiters, select)
+from agent_run import (SLOTS, budget_for, configured_gpu, display_command, gpu_conflict, headroom,
+                       host_resources, ordered_waiters, select)
 
 DEFAULT_PORT = 8767
 REFRESH_SECONDS = 2
@@ -270,8 +270,9 @@ def agent_jobs(paths, locks, processes, warnings, now, *, running):
         started = number(record.get("started"))
         cores = number(record.get("cores"), minimum=1)
         mem = number(record.get("mem"), minimum=1)
+        vram = number(record.get("vram", 0))  # Records from older launchers have no GPU field.
         estimate = number(record.get("estimate"), minimum=1)
-        required = (cores, mem, estimate, queued, started) if running else (cores, mem, estimate, queued)
+        required = (cores, mem, vram, estimate, queued) + ((started,) if running else ())
         if None in required:
             complete = False
             warnings.append("Some records lacked timing or reservation fields.")
@@ -285,7 +286,8 @@ def agent_jobs(paths, locks, processes, warnings, now, *, running):
             cwd=text(record.get("cwd")) or processes.cwd(holder),
             command=text(record.get("command")) or processes.command(holder),
             owner_chain=processes.chain(holder),
-            cores=cores, mem=mem, estimate=estimate, queued=queued,
+            cores=cores, mem=mem, vram=vram, gpu_exclusive=record.get("gpu_exclusive") is True,
+            estimate=estimate, queued=queued,
             wait_seconds=elapsed(started if running else now, queued), held_seconds=held,
             remaining_seconds=max(0, estimate - held) if running else None,
         ))
@@ -295,7 +297,7 @@ def agent_jobs(paths, locks, processes, warnings, now, *, running):
 def admission_reasons(waiting, running, budget, now, complete):
     has_slot = len(running) < SLOTS
     selected = select(waiting, running, budget, now, has_slot) if budget and complete else None
-    cores, mem = headroom(running, budget) if budget else (0, 0)
+    cores, mem, vram = headroom(running, budget) if budget else (0, 0, 0)
     draining = False
     earlier_ready = False
     for position, job in enumerate(waiting, 1):
@@ -320,6 +322,12 @@ def admission_reasons(waiting, running, budget, now, complete):
             if job["mem"] > mem:
                 limits.append("Live memory headroom" if job["mem"] > budget.live_mem
                               else "Reserved memory capacity")
+            if job["vram"] and job["vram"] > vram:
+                limits.append("Live VRAM headroom" if job["vram"] > budget.live_vram
+                              else "Reserved VRAM capacity")
+            active = [other for other in running if other["liveness"] == "active"]
+            if conflict := gpu_conflict(job, active):
+                limits.append(conflict)
             reason = " · ".join(limits)
             draining = now - job["queued"] >= budget.aging
         job.update(position=position, admission=reason)
@@ -461,7 +469,10 @@ class Snapshot:
             machine.update(total_cores=total_cores, total_mem=total_mem,
                            mem_available=available, mem_used=total_mem - available, load_1m=load)
             if config_valid:
-                budget = budget_for(config, host)
+                gpu = configured_gpu(config)
+                if gpu:
+                    machine.update(vram_used=gpu[2])
+                budget = budget_for(config, host, gpu)
                 machine.update(asdict(budget))
         except (OSError, KeyError, ValueError):
             warnings.append("The current budget or host counters could not be read.")
@@ -482,7 +493,8 @@ class Snapshot:
         waiting = ordered_waiters(waiting, now, budget.aging if budget else 300)
         admission_reasons(waiting, running, budget, now, locks.available and complete_running and complete_waiting)
         machine.update(reserved_cores=sum(job["cores"] for job in running if job["liveness"] == "active"),
-                       reserved_mem=sum(job["mem"] for job in running if job["liveness"] == "active"))
+                       reserved_mem=sum(job["mem"] for job in running if job["liveness"] == "active"),
+                       reserved_vram=sum(job["vram"] for job in running if job["liveness"] == "active"))
         managed = {job["owner_chain"][0]["pid"] for job in running + waiting if job["owner_chain"]}
         heavy = processes.heavy(self.previous, now - self.sampled, managed)
         self.previous = processes.rows

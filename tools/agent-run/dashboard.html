@@ -55,6 +55,7 @@
 
   /* Overview */
   .overview { display: grid; grid-template-columns: 1.45fr 1.45fr 1fr 1fr; margin-bottom: 8px }
+  .overview.gpu { grid-template-columns: 1.45fr 1.45fr 1.45fr 1fr 1fr }
   .legend { justify-content: flex-end; margin: 0 4px 20px }
   .stat { padding: 14px 18px 13px; border-left: 1px solid var(--line-2); min-width: 0; display: flex; flex-direction: column }
   .stat:first-child { border-left: 0 }
@@ -162,6 +163,7 @@
   <symbol id="i-logo" viewBox="0 0 24 24"><path d="M4 7h10M4 12h16M4 17h7"/><circle cx="18" cy="7" r="1.6"/><circle cx="15" cy="17" r="1.6"/></symbol>
   <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx=".5"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></symbol>
   <symbol id="i-mem" viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="10" rx="1.5"/><path d="M6 11v2M10 11v2M14 11v2M18 11v2M6 17v3M18 17v3"/></symbol>
+  <symbol id="i-gpu" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="11" rx="1.5"/><circle cx="15" cy="11.5" r="3"/><path d="M6 9.5h4M6 13.5h4M5 17v3M10 17v3"/></symbol>
   <symbol id="i-queue" viewBox="0 0 24 24"><path d="M8 6h12M8 12h12M8 18h12"/><path d="M4 6h.01M4 12h.01M4 18h.01" stroke-width="3"/></symbol>
   <symbol id="i-run" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/></symbol>
   <symbol id="i-wait" viewBox="0 0 24 24"><path d="M6 2h12M6 22h12M7 2c0 5 10 5 10 10S7 17 7 22M17 2c0 5-10 5-10 10s10 5 10 10"/></symbol>
@@ -204,6 +206,12 @@
       <div class="value" id="mem-value">—</div>
       <div class="budget" id="mem-bar"></div>
       <small id="mem-note"></small>
+    </div>
+    <div class="stat" id="gpu-stat" hidden>
+      <div class="label"><svg class="i sm"><use href="#i-gpu"/></svg>GPU memory</div>
+      <div class="value" id="gpu-value">—</div>
+      <div class="budget" id="gpu-bar"></div>
+      <small id="gpu-note"></small>
     </div>
     <div class="stat">
       <div class="label"><svg class="i sm"><use href="#i-queue"/></svg>Queue</div>
@@ -303,13 +311,15 @@
   }
   const res = job => el("div", {class: "res num"},
     el("span", {title: "Reserved cores"}, icon("cpu", "sm"), num(job.cores)),
-    el("span", {title: "Reserved memory"}, icon("mem", "sm"), bytes(job.mem)));
+    el("span", {title: "Reserved memory"}, icon("mem", "sm"), bytes(job.mem)),
+    job.vram ? el("span", {title: "Reserved GPU memory"}, icon("gpu", "sm"), bytes(job.vram)) : null,
+    job.gpu_exclusive ? el("span", {title: "Exclusive GPU use"}, icon("lock", "sm"), "GPU") : null);
 
   const REASONS = [
     [/ready/, "green", "play"], [/drain|aged/, "quiet", "drain"], [/exceed/, "red", "alert"],
     [/unknown/, "", "help"], [/slot/, "blue", "slots"], [/exclusive/, "violet", "lock"],
     [/worktree/, "blue", "branch"], [/priority|earlier/, "blue", "flag"],
-    [/cpu/, null, "cpu"], [/memory/, null, "mem"],
+    [/cpu/, null, "cpu"], [/memory/, null, "mem"], [/vram|gpu/, null, "gpu"],
   ];
   const MAVEN_LABELS = {memory: "Memory headroom", cpu: "CPU headroom", slots: "Admission slots", exclusive: "Exclusive job running",
     worktree: "Worktree busy", priority: "Higher-priority job", draining: "Draining for aged job", ready: "Ready", unknown: "Admission unknown"};
@@ -357,7 +367,7 @@
   function fold(jobs) {
     const groups = [];
     for (const job of jobs) {
-      const key = [job.label, job.command, job.cwd || job.worktree, job.cores, job.mem, job.admission].join("\0");
+      const key = [job.label, job.command, job.cwd || job.worktree, job.cores, job.mem, job.vram, job.gpu_exclusive, job.admission].join("\0");
       const last = groups.at(-1);
       if (last && last.key === key) last.jobs.push(job); else groups.push({key, jobs: [job]});
     }
@@ -420,6 +430,14 @@
     $("mem-value").replaceChildren(bytes(m.mem_available), el("small", null, "available"));
     budgetBar($("mem-bar"), m.total_mem, m.reserved_mem, m.mem_used, m.reserve_mem);
     $("mem-note").textContent = `${bytes(m.reserved_mem)} of ${bytes(m.mem)} reserved · ${bytes(m.live_mem)} free`;
+    const gpu = m.total_vram > 0;
+    $("gpu-stat").hidden = !gpu;
+    $("gpu-stat").parentElement.classList.toggle("gpu", gpu);
+    if (gpu) {
+      $("gpu-value").replaceChildren(bytes(Math.max(0, m.total_vram - m.vram_used)), el("small", null, "free"));
+      budgetBar($("gpu-bar"), m.total_vram, m.reserved_vram, m.vram_used, m.reserve_vram);
+      $("gpu-note").textContent = `${bytes(m.reserved_vram)} of ${bytes(m.vram)} reserved · ${bytes(Math.max(0, m.live_vram))} free`;
+    }
     $("queue-value").replaceChildren(String(d.running.length), el("small", null, "running"), String(d.waiting.length), el("small", null, "waiting"));
     const oldest = Math.max(0, ...d.waiting.map(j => j.wait_seconds || 0));
     $("queue-note").textContent = d.waiting.length ? `Longest wait ${dur(oldest)}` : "Nothing waiting";

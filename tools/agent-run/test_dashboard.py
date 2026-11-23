@@ -68,6 +68,28 @@ class DashboardTests(unittest.TestCase):
         self.assertGreaterEqual(waiting[0]["wait_seconds"], 10)
         self.assertEqual(result["machine"]["reserve_mem"], 6 * GIB)
 
+    def test_snapshot_reports_vram_reservations(self):
+        self.record(self.state / "config.json", {"reserve_vram": "0"}, locked=False)
+        self.record(self.state / "slot-0.lock", self.job("model", started=self.now - 4, vram=12 * GIB))
+        self.record(self.state / "waiting" / "next.json", self.job("next", vram=8 * GIB))
+        with patch("agent_run_dashboard.host_resources", return_value=(16, 32 * GIB, 24 * GIB, 1)), \
+                patch("agent_run_dashboard.configured_gpu", return_value=("0000:03:00.0", 16 * GIB, 13 * GIB)):
+            result = self.source()
+        machine = result["machine"]
+        self.assertEqual((machine["vram"], machine["reserved_vram"], machine["vram_used"]),
+                         (16 * GIB, 12 * GIB, 13 * GIB))
+        self.assertEqual(result["waiting"][0]["admission"], "Live VRAM headroom")
+
+    def test_snapshot_explains_exclusive_gpu_waits(self):
+        self.record(self.state / "slot-0.lock", self.job("model", started=self.now - 4, vram=GIB))
+        self.record(self.state / "waiting" / "solo.json", self.job("solo", gpu_exclusive=True))
+        with patch("agent_run_dashboard.host_resources", return_value=(16, 32 * GIB, 24 * GIB, 1)), \
+                patch("agent_run_dashboard.configured_gpu", return_value=("0000:03:00.0", 16 * GIB, 2 * GIB)):
+            result = self.source()
+        waiting, = result["waiting"]
+        self.assertTrue(waiting["gpu_exclusive"])
+        self.assertEqual(waiting["admission"], "GPU in use")
+
     def test_legacy_lease_and_telemetry_survive_partial_records(self):
         self.record(self.state / "slot-0.lock", self.job("legacy", started=self.now - 1))
         (self.state / "telemetry.jsonl").write_text(
