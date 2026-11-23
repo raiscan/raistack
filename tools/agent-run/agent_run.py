@@ -42,9 +42,28 @@ def display_memory(amount):
     return f"{amount}B"
 
 
-def resources(cores, mem):
+def resources(cores, mem, vram=0):
     word = "core" if cores == 1 else "cores"
-    return f"{cores} {word} / {display_memory(mem)}"
+    gpu = f" / {display_memory(vram)} VRAM" if vram else ""
+    return f"{cores} {word} / {display_memory(mem)}{gpu}"
+
+
+def job_resources(job):
+    text = resources(job["cores"], job["mem"], job.get("vram", 0))
+    return text + " / exclusive GPU" if job.get("gpu_exclusive") else text
+
+
+def uses_gpu(job):
+    return bool(job.get("vram") or job.get("gpu_exclusive"))
+
+
+def gpu_conflict(job, running):
+    """Name what stops a GPU job sharing the device, or None."""
+    if job.get("gpu_exclusive"):
+        return "GPU in use" if any(uses_gpu(other) for other in running) else None
+    if uses_gpu(job) and any(other.get("gpu_exclusive") for other in running):
+        return "Exclusive GPU job running"
+    return None
 
 
 def host_resources():
@@ -57,6 +76,34 @@ def host_resources():
     return os.sysconf("SC_NPROCESSORS_ONLN"), mem["MemTotal"], mem["MemAvailable"], os.getloadavg()[0]
 
 
+def gpu_resources(selector=None, drm=Path("/sys/class/drm")):
+    """Return (PCI address, total VRAM, used VRAM) for one GPU, or None without one.
+
+    Reads the amdgpu sysfs counters. Without a selector, the card with the most
+    VRAM is chosen, which skips small integrated GPUs. A selector may be a DRM
+    card name such as card1 or a PCI address such as 0000:03:00.0.
+    """
+    best = None
+    for card in sorted(drm.glob("card*")):
+        if not card.name[4:].isdigit():
+            continue  # Connector entries such as card1-DP-1.
+        device = card / "device"
+        try:
+            total = int((device / "mem_info_vram_total").read_text())
+            used = int((device / "mem_info_vram_used").read_text())
+            address = device.resolve().name
+        except (OSError, ValueError):
+            continue
+        if selector is not None:
+            if selector in (card.name, address):
+                return address, total, used
+        elif best is None or total > best[1]:
+            best = (address, total, used)
+    if selector is not None:
+        raise ValueError(f"GPU {selector!r} has no readable VRAM counters")
+    return best
+
+
 @dataclass(frozen=True)
 class Budget:
     cores: int
@@ -66,9 +113,14 @@ class Budget:
     aging: int
     reserve_cores: int
     reserve_mem: int
+    vram: int = 0
+    live_vram: int = 0
+    reserve_vram: int = 0
+    total_vram: int = 0
+    gpu: str = None
 
     def allows(self, job):
-        return job["cores"] <= self.cores and job["mem"] <= self.mem
+        return job["cores"] <= self.cores and job["mem"] <= self.mem and job.get("vram", 0) <= self.vram
 
 
 def read_budget(config_path):
@@ -76,14 +128,22 @@ def read_budget(config_path):
         config = json.loads(config_path.read_text())
     except FileNotFoundError:
         config = {}
-    return budget_for(config, host_resources())
+    return budget_for(config, host_resources(), configured_gpu(config))
 
 
-def budget_for(config, host):
+def configured_gpu(config):
+    selector = config.get("gpu") if isinstance(config, dict) else None
+    if selector is not None and not isinstance(selector, str):
+        raise ValueError("gpu must be a DRM card name or PCI address string")
+    return gpu_resources(selector)
+
+
+def budget_for(config, host, gpu=None):
     if not isinstance(config, dict):
         raise ValueError("config.json must contain an object")
     unknown = config.keys() - {
-        "reserve_cores", "reserve_mem", "max_cores", "max_mem", "aging_seconds", "maven_repos"
+        "reserve_cores", "reserve_mem", "max_cores", "max_mem", "aging_seconds", "maven_repos",
+        "gpu", "reserve_vram", "max_vram",
     }
     if unknown:
         raise ValueError(f"Unknown config keys: {', '.join(sorted(unknown))}")
@@ -110,8 +170,15 @@ def budget_for(config, host):
     mem = min(total_mem - reserve_mem, size("max_mem", str(total_mem)))
     if cores <= 0 or mem <= 0:
         raise ValueError("Desktop reserves leave no capacity for agent-run")
+    # VRAM is a third reserved resource. Without a readable GPU the budget is
+    # zero, so only jobs that request VRAM are refused.
+    address, total_vram, used_vram = gpu or (None, 0, 0)
+    reserve_vram = size("reserve_vram", str(min(GIB, total_vram // 8)), allow_zero=True)
+    max_vram = size("max_vram", str(total_vram), allow_zero=True)
+    vram = max(0, min(total_vram - reserve_vram, max_vram))
     return Budget(cores, mem, total_cores - reserve_cores - load, available - reserve_mem,
-                  integer("aging_seconds", 300, 1), reserve_cores, reserve_mem)
+                  integer("aging_seconds", 300, 1), reserve_cores, reserve_mem,
+                  vram, total_vram - used_vram - reserve_vram, reserve_vram, total_vram, address)
 
 
 def ordered_waiters(waiting, now, aging):
@@ -129,17 +196,25 @@ def headroom(running, budget):
     # desktop apps and jobs outside the queue. Neither is a hard OS quota.
     cores = min(budget.cores - sum(job["cores"] for job in running), budget.live_cores)
     mem = min(budget.mem - sum(job["mem"] for job in running), budget.live_mem)
-    return cores, mem
+    vram = min(budget.vram - sum(job.get("vram", 0) for job in running), budget.live_vram)
+    return cores, mem, vram
+
+
+def fits(job, cores, mem, vram):
+    # Jobs without a GPU request never wait on VRAM, even when the desktop has
+    # pushed live VRAM headroom below zero.
+    need = job.get("vram", 0)
+    return job["cores"] <= cores and job["mem"] <= mem and (not need or need <= vram)
 
 
 def select(waiting, running, budget, now, has_slot):
     if not has_slot:
         return None
-    cores, mem = headroom(running, budget)
+    available = headroom(running, budget)
     for job in waiting:
         if not budget.allows(job):
             continue
-        if job["cores"] <= cores and job["mem"] <= mem:
+        if fits(job, *available) and not gpu_conflict(job, running):
             return job["id"]
         if now - job["queued"] >= budget.aging:
             # Drain instead of admitting more short jobs ahead of an aged head.
@@ -252,7 +327,7 @@ class Queue:
                     ahead = next(index for index, candidate in enumerate(waiting)
                                  if candidate["id"] == job["id"])
                 if now >= notice:
-                    print(f"agent-run: waiting for {resources(job['cores'], job['mem'])}; "
+                    print(f"agent-run: waiting for {job_resources(job)}; "
                           f"{ahead} {'job' if ahead == 1 else 'jobs'} ahead "
                           f"({now - job['queued']:.0f}s waited)", file=sys.stderr, flush=True)
                     notice = now + 15
@@ -269,9 +344,11 @@ class Queue:
 
     @staticmethod
     def check_size(job, budget):
+        if uses_gpu(job) and not budget.total_vram:
+            raise ValueError("Request needs the GPU, but no GPU with readable amdgpu VRAM counters was found")
         if not budget.allows(job):
-            raise ValueError(f"Request {resources(job['cores'], job['mem'])} exceeds machine budget "
-                             f"of {resources(budget.cores, budget.mem)}")
+            raise ValueError(f"Request {job_resources(job)} exceeds machine budget "
+                             f"of {resources(budget.cores, budget.mem, job.get('vram') and budget.vram)}")
 
     def status(self):
         with self.gate():
@@ -282,6 +359,9 @@ class Queue:
         print(f"Machine budget {resources(budget.cores, budget.mem)}  |  "
               f"Live headroom {max(0, budget.live_cores):.1f} cores / "
               f"{display_memory(max(0, budget.live_mem))}")
+        if budget.total_vram:
+            print(f"GPU {budget.gpu} budget {display_memory(budget.vram)} VRAM  |  "
+                  f"Live headroom {display_memory(max(0, budget.live_vram))}")
         print(f"{len(running)} running, {len(waiting)} waiting")
         for state, jobs, since in (("running", running, "started"), ("waiting", waiting, "queued")):
             for job in jobs:
@@ -289,7 +369,7 @@ class Queue:
                 label = json.dumps(job["label"], ensure_ascii=True)[1:-1]
                 cwd = json.dumps(job["cwd"], ensure_ascii=True)[1:-1]
                 print(f"{state} {label}  |  pid {job['pid']}  |  "
-                      f"{resources(job['cores'], job['mem'])}  |  "
+                      f"{job_resources(job)}  |  "
                       f"{now - job[since]:.1f}s  |  {cwd}")
 
     def record(self, job, code):
@@ -456,7 +536,7 @@ def update(source=None, out=sys.stdout):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, usage=(
-        "%(prog)s [--mem 4G] [--cores 4] [--est 10m] [--label LABEL] [--java-cores] -- COMMAND ...\n"
+        "%(prog)s [--mem 4G] [--cores 4] [--vram 8G] [--gpu-exclusive] [--est 10m] [--label LABEL] [--java-cores] -- COMMAND ...\n"
         "       %(prog)s --status | --stats | --dashboard [--port N] | --update"))
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--status", action="store_true", help="show running and waiting jobs")
@@ -466,6 +546,9 @@ def main(argv=None):
     parser.add_argument("--port", type=int, help="dashboard port (default: 8767)")
     parser.add_argument("--mem", help="estimated memory, such as 4G")
     parser.add_argument("--cores", type=int, help="estimated CPU cores")
+    parser.add_argument("--vram", help="estimated GPU memory, such as 8G (default: no GPU use)")
+    parser.add_argument("--gpu-exclusive", action="store_true",
+                        help="run only while no other queued GPU job is running")
     parser.add_argument("--est", help="expected run time for queue ordering, such as 10m")
     parser.add_argument("--label", help="name to show in the queue")
     parser.add_argument("--java-cores", action="store_true", help="export a JVM processor-count hint")
@@ -476,8 +559,8 @@ def main(argv=None):
     observation = args.status or args.stats or args.dashboard or args.update
     if args.port is not None and (not args.dashboard or not 0 <= args.port <= 65535):
         parser.error("--port requires --dashboard and must be between 0 and 65535")
-    if observation and (split < len(argv) or args.java_cores or any(
-            value is not None for value in (args.mem, args.cores, args.est, args.label))):
+    if observation and (split < len(argv) or args.java_cores or args.gpu_exclusive or any(
+            value is not None for value in (args.mem, args.cores, args.vram, args.est, args.label))):
         parser.error("--status, --stats, --dashboard and --update do not take a command or resource options")
     if not observation and not command:
         parser.error("supply a command after --")
@@ -501,7 +584,8 @@ def main(argv=None):
         estimate = estimate if args.est is None else duration(args.est)
         if cores <= 0:
             raise ValueError("--cores must be positive")
-        job = dict(cores=cores, mem=mem, estimate=estimate, pid=os.getpid(), cwd=os.getcwd(),
+        job = dict(cores=cores, mem=mem, vram=0 if args.vram is None else memory(args.vram),
+                   gpu_exclusive=args.gpu_exclusive, estimate=estimate, pid=os.getpid(), cwd=os.getcwd(),
                    label=args.label or Path(command[0]).name, command=display_command(command))
         with Signals().installed() as signals:
             try:

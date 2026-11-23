@@ -18,6 +18,8 @@ sys.path.insert(0, sys.argv.pop(1))
 import agent_run
 agent_run.host_resources = lambda: json.loads(
     (Path(os.environ['XDG_STATE_HOME']) / 'host.json').read_text())
+gpu = Path(os.environ['XDG_STATE_HOME']) / 'gpu.json'
+agent_run.gpu_resources = lambda selector=None: json.loads(gpu.read_text()) if gpu.exists() else None
 sys.exit(agent_run.main())
 """
 
@@ -50,6 +52,11 @@ class RunnerTests(unittest.TestCase):
         sample = self.root / "host.next"
         sample.write_text(json.dumps([32, 32 << 30, available, load]))
         sample.replace(self.root / "host.json")
+
+    def gpu(self, used=0, total=16 << 30):
+        sample = self.root / "gpu.next"
+        sample.write_text(json.dumps(["0000:03:00.0", total, used]))
+        sample.replace(self.root / "gpu.json")
 
     def using_budget(self, **overrides):
         config = dict(max_cores=4, max_mem="2G", **overrides)
@@ -228,6 +235,92 @@ while True:
         for worker_args in (["--jobs", "2"], ["--jobs=2"]):
             command = ["java", "-jar", "tool.jar", "bench", "run", *worker_args]
             self.assertEqual((2, 3 << 30, 600), defaults(command))
+
+    def test_vram_reservations_serialize_gpu_jobs_only(self):
+        self.gpu()
+        first = self.job("first", 1, "1M", flags=("--vram", "10G"))
+        self.started("first")
+        second = self.job("second", 1, "1M", flags=("--vram", "10G"))
+        self.wait_for(lambda: self.status_has("waiting second"))
+        cpu = self.job("cpu", 1, "1M")
+        self.started("cpu")
+        self.assertTrue(self.status_has("GPU 0000:03:00.0 budget 15G VRAM"))
+        self.assertFalse((self.root / "second.pid").exists())
+        self.stop_job("first")
+        self.assertEqual(first.wait(timeout=5), 0)
+        self.started("second")
+        for name, job in (("second", second), ("cpu", cpu)):
+            self.stop_job(name)
+            self.assertEqual(job.wait(timeout=5), 0)
+        self.assertIn("waiting for 1 core / 1M / 10G VRAM", second.stderr.read())
+
+    def test_live_vram_gates_gpu_jobs_but_not_cpu_jobs(self):
+        self.gpu(used=16 << 30)
+        cpu = self.job("cpu", 1, "1M")
+        self.started("cpu")
+        gpu = self.job("gpu", 1, "1M", flags=("--vram", "4G"))
+        self.wait_for(lambda: self.status_has("waiting gpu"))
+        self.gpu(used=4 << 30)
+        self.started("gpu")
+        for name, job in (("cpu", cpu), ("gpu", gpu)):
+            self.stop_job(name)
+            self.assertEqual(job.wait(timeout=5), 0)
+
+    def test_exclusive_gpu_job_waits_for_and_blocks_gpu_jobs(self):
+        self.gpu()
+        small = self.job("small", 1, "1M", flags=("--vram", "1G"))
+        self.started("small")
+        exclusive = self.job("exclusive", 1, "1M", flags=("--gpu-exclusive",))
+        self.wait_for(lambda: self.status_has("waiting exclusive"))
+        self.stop_job("small")
+        self.assertEqual(small.wait(timeout=5), 0)
+        self.started("exclusive")
+        self.assertTrue(self.status_has("1 core / 1M / exclusive GPU"))
+        later = self.job("later", 1, "1M", flags=("--vram", "1G"))
+        self.wait_for(lambda: self.status_has("waiting later"))
+        cpu = self.job("cpu", 1, "1M")
+        self.started("cpu")
+        self.assertFalse((self.root / "later.pid").exists())
+        self.stop_job("exclusive")
+        self.assertEqual(exclusive.wait(timeout=5), 0)
+        self.started("later")
+        for name, job in (("later", later), ("cpu", cpu)):
+            self.stop_job(name)
+            self.assertEqual(job.wait(timeout=5), 0)
+
+    def test_vram_request_without_gpu_or_over_budget_fails(self):
+        command = ("--", sys.executable, "-c", "raise SystemExit(99)")
+        result = self.cli("--vram", "1G", *command)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("no GPU", result.stderr)
+        result = self.cli("--gpu-exclusive", *command)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("no GPU", result.stderr)
+        self.gpu()
+        self.using_budget(max_vram="8G")
+        result = self.cli("--vram", "9G", *command)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("exceeds machine budget of 4 cores / 2G / 8G VRAM", result.stderr)
+
+    def test_gpu_discovery_prefers_largest_amdgpu_card(self):
+        from agent_run import gpu_resources
+
+        drm = self.root / "drm"
+        for card, address, total, used in (("card0", "0000:19:00.0", 512 << 20, 1),
+                                           ("card1", "0000:03:00.0", 16 << 30, 2)):
+            device = self.root / "pci" / address
+            device.mkdir(parents=True)
+            (device / "mem_info_vram_total").write_text(f"{total}\n")
+            (device / "mem_info_vram_used").write_text(f"{used}\n")
+            (drm / card).mkdir(parents=True)
+            (drm / card / "device").symlink_to(device)
+        (drm / "card1-DP-1").mkdir()
+        self.assertEqual(gpu_resources(drm=drm), ("0000:03:00.0", 16 << 30, 2))
+        self.assertEqual(gpu_resources("card0", drm), ("0000:19:00.0", 512 << 20, 1))
+        self.assertEqual(gpu_resources("0000:19:00.0", drm), ("0000:19:00.0", 512 << 20, 1))
+        with self.assertRaisesRegex(ValueError, "card7"):
+            gpu_resources("card7", drm)
+        self.assertIsNone(gpu_resources(drm=self.root / "empty"))
 
     def test_oversized_request_fails_without_waiting(self):
         result = self.cli("--cores", "5", "--", sys.executable, "-c", "raise SystemExit(99)")
