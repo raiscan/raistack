@@ -64,6 +64,8 @@ class Budget:
     live_cores: float
     live_mem: int
     aging: int
+    reserve_cores: int
+    reserve_mem: int
 
     def allows(self, job):
         return job["cores"] <= self.cores and job["mem"] <= self.mem
@@ -74,9 +76,15 @@ def read_budget(config_path):
         config = json.loads(config_path.read_text())
     except FileNotFoundError:
         config = {}
+    return budget_for(config, host_resources())
+
+
+def budget_for(config, host):
     if not isinstance(config, dict):
         raise ValueError("config.json must contain an object")
-    unknown = config.keys() - {"reserve_cores", "reserve_mem", "max_cores", "max_mem", "aging_seconds"}
+    unknown = config.keys() - {
+        "reserve_cores", "reserve_mem", "max_cores", "max_mem", "aging_seconds", "maven_repos"
+    }
     if unknown:
         raise ValueError(f"Unknown config keys: {', '.join(sorted(unknown))}")
 
@@ -94,7 +102,7 @@ def read_budget(config_path):
             raise ValueError(f"{key} must be a size string such as 6G")
         return memory(value)
 
-    total_cores, total_mem, available, load = host_resources()
+    total_cores, total_mem, available, load = host
     # Leave enough capacity for at least one small job on small machines.
     reserve_cores = integer("reserve_cores", min(4, total_cores // 4), 0)
     reserve_mem = size("reserve_mem", str(min(6 * GIB, total_mem // 4)), allow_zero=True)
@@ -103,7 +111,7 @@ def read_budget(config_path):
     if cores <= 0 or mem <= 0:
         raise ValueError("Desktop reserves leave no capacity for agent-run")
     return Budget(cores, mem, total_cores - reserve_cores - load, available - reserve_mem,
-                  integer("aging_seconds", 300, 1))
+                  integer("aging_seconds", 300, 1), reserve_cores, reserve_mem)
 
 
 def ordered_waiters(waiting, now, aging):
@@ -116,13 +124,18 @@ def ordered_waiters(waiting, now, aging):
     return sorted(waiting, key=priority)
 
 
-def select(waiting, running, budget, now, has_slot):
-    if not has_slot:
-        return None
+def headroom(running, budget):
     # Reservations constrain total demand, while live counters protect against
     # desktop apps and jobs outside the queue. Neither is a hard OS quota.
     cores = min(budget.cores - sum(job["cores"] for job in running), budget.live_cores)
     mem = min(budget.mem - sum(job["mem"] for job in running), budget.live_mem)
+    return cores, mem
+
+
+def select(waiting, running, budget, now, has_slot):
+    if not has_slot:
+        return None
+    cores, mem = headroom(running, budget)
     for job in waiting:
         if not budget.allows(job):
             continue
@@ -383,13 +396,35 @@ def defaults(command):
     return 4, 2 * GIB, 600
 
 
+# Display common build operations without persisting arbitrary argv values.
+DISPLAY_ARGUMENTS = frozenset({
+    "build", "check", "clean", "compile", "install", "lint", "package", "run",
+    "test", "verify", "bench", "--release", "--no-daemon", "--offline", "-B", "-q",
+})
+
+
+def display_command(command):
+    if not command:
+        return None
+    executable = Path(command[0]).name or "command"
+    parts = [executable[:256]]
+    for index, arg in enumerate(command[1:]):
+        if index == 8 or arg not in DISPLAY_ARGUMENTS:
+            parts.append("…")
+            break
+        parts.append(arg)
+    return " ".join(parts)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, usage=(
         "%(prog)s [--mem 4G] [--cores 4] [--est 10m] [--label LABEL] [--java-cores] -- COMMAND ...\n"
-        "       %(prog)s --status | --stats"))
+        "       %(prog)s --status | --stats | --dashboard [--port N]"))
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--status", action="store_true", help="show running and waiting jobs")
     mode.add_argument("--stats", action="store_true", help="summarize completed-job telemetry")
+    mode.add_argument("--dashboard", action="store_true", help="serve the local read-only dashboard")
+    parser.add_argument("--port", type=int, help="dashboard port (default: 8767)")
     parser.add_argument("--mem", help="estimated memory, such as 4G")
     parser.add_argument("--cores", type=int, help="estimated CPU cores")
     parser.add_argument("--est", help="expected run time for queue ordering, such as 10m")
@@ -399,15 +434,23 @@ def main(argv=None):
     split = argv.index("--") if "--" in argv else len(argv)
     args = parser.parse_args(argv[:split])
     command = argv[split + 1:]
-    observation = args.status or args.stats
+    observation = args.status or args.stats or args.dashboard
+    if args.port is not None and (not args.dashboard or not 0 <= args.port <= 65535):
+        parser.error("--port requires --dashboard and must be between 0 and 65535")
     if observation and (split < len(argv) or args.java_cores or any(
             value is not None for value in (args.mem, args.cores, args.est, args.label))):
-        parser.error("--status and --stats do not take a command or resource options")
+        parser.error("observation modes do not take a command or resource options")
     if not observation and not command:
         parser.error("supply a command after --")
 
     try:
-        queue = Queue(state_path())
+        state = state_path()
+        if args.dashboard:
+            from agent_run_dashboard import DEFAULT_PORT, serve
+
+            serve(state, DEFAULT_PORT if args.port is None else args.port)
+            return 0
+        queue = Queue(state)
         if observation:
             queue.status() if args.status else queue.stats()
             return 0
@@ -418,7 +461,7 @@ def main(argv=None):
         if cores <= 0:
             raise ValueError("--cores must be positive")
         job = dict(cores=cores, mem=mem, estimate=estimate, pid=os.getpid(), cwd=os.getcwd(),
-                   label=args.label or Path(command[0]).name)
+                   label=args.label or Path(command[0]).name, command=display_command(command))
         with Signals().installed() as signals:
             try:
                 with queue.admission(job, signals) as lease:

@@ -8,4 +8,10 @@ Shared, agent-agnostic skills for Codex, Claude Code, and other compatible agent
 
 Clone this repository and run `./install.sh`. It links skills into `~/.agents/skills` and commands into `~/.local/bin`, and clones cowtree into `~/.local/share/cowtree` if absent. Ensure the bin directory is on PATH. Set `AGENT_SKILLS_HOME`, `RAISTACK_BIN_HOME`, or `COWTREE_HOME` to change destinations. Existing non-symlinks are protected unless `--force` is passed; back them up first. Existing symlinks may be replaced. Configure other agents to load the skills directory, or link the individual skill directories into their own skill location.
 
+Run `agent-run --dashboard` and open `http://127.0.0.1:8767/` for the
+read-only machine budget, queue, completion history, and heavy processes
+outside the runner. Use `--port N` to choose another loopback port. The
+[runner documentation](tools/agent-run/README.md#dashboard) covers command
+display and optional per-repository Maven queues.
+
 Run the synthetic tests with `cd tools/agent-run && python3 -m unittest -v`. Queue state uses `XDG_STATE_HOME` (default `~/.local/state`); installation does not modify it.
