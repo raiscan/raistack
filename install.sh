@@ -5,9 +5,10 @@ force=false
 if [ "${1-}" = --force ]; then force=true; shift; fi
 [ "$#" -eq 0 ] || { echo 'Usage: install.sh [--force]' >&2; exit 2; }
 skills=${AGENT_SKILLS_HOME:-"$HOME/.agents/skills"}
+claude_skills=${CLAUDE_SKILLS_HOME:-"$HOME/.claude/skills"}
 bin=${RAISTACK_BIN_HOME:-"$HOME/.local/bin"}
 cow=${COWTREE_HOME:-"$HOME/.local/share/cowtree"}
-mkdir -p "$skills" "$bin" "$(dirname "$cow")"
+mkdir -p "$skills" "$claude_skills" "$bin" "$(dirname "$cow")"
 link() {
   src=$1 dest=$2
   if [ -L "$dest" ]; then
@@ -27,6 +28,9 @@ if [ ! -d "$cow/.git" ]; then
 else
   echo "Using cowtree at $cow"
 fi
-for name in agent-run temporary-agents cowtree cow-git-worktree; do link "$root/skills/$name" "$skills/$name"; done
+for name in agent-run temporary-agents cowtree cow-git-worktree; do
+  link "$root/skills/$name" "$skills/$name"
+  link "$root/skills/$name" "$claude_skills/$name"
+done
 link "$root/tools/agent-run/agent-run" "$bin/agent-run"
 link "$cow/bin/git-cowtree" "$bin/git-cowtree"

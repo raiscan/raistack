@@ -6,7 +6,7 @@ Shared, agent-agnostic skills for Codex, Claude Code, and other compatible agent
 - **temporary-agents**: lifecycle guidance for delegated and persistent agent sessions.
 - **cowtree** and **cow-git-worktree**: guidance for copy-on-write Git worktrees. The tool lives in [raiscan/cowtree](https://github.com/raiscan/cowtree), and is installed separately.
 
-Clone this repository and run `./install.sh`. It links skills into `~/.agents/skills` and commands into `~/.local/bin`, and clones cowtree into `~/.local/share/cowtree` if absent. Ensure the bin directory is on PATH. Set `AGENT_SKILLS_HOME`, `RAISTACK_BIN_HOME`, or `COWTREE_HOME` to change destinations. Existing non-symlinks are protected unless `--force` is passed; back them up first. Existing symlinks may be replaced. Configure other agents to load the skills directory, or link the individual skill directories into their own skill location.
+Clone this repository and run `./install.sh`. It links skills into `~/.agents/skills` and `~/.claude/skills`, and commands into `~/.local/bin`, and clones cowtree into `~/.local/share/cowtree` if absent. Ensure the bin directory is on PATH. Set `AGENT_SKILLS_HOME`, `CLAUDE_SKILLS_HOME`, `RAISTACK_BIN_HOME`, or `COWTREE_HOME` to change destinations. Existing non-symlinks are protected unless `--force` is passed; back them up first. Existing symlinks may be replaced. Configure other agents to load the skills directory, or link the individual skill directories into their own skill location.
 
 Update an installation from anywhere with `agent-run --update`, which fast-forwards the clone that the command links to, wherever it is.
 
